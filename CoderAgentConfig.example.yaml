@@ -1,0 +1,9 @@
+# CoderAgent Configuration
+#
+# Copy this file to CoderAgentConfig.yaml and fill in your values.
+# CoderAgentConfig.yaml is git-ignored so your token stays local.
+#
+# Generate a token at: https://github.com/settings/tokens
+# Required scope: 'copilot'
+
+github_token: XXXXXXXXXXXXXXXXXX

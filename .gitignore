@@ -1,0 +1,5 @@
+# Real config with secrets — never commit
+CoderAgentConfig.yaml
+
+# Agent logs
+logs/

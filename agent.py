@@ -20,6 +20,7 @@ Prerequisites:
 import subprocess
 import sys
 import os
+import re
 import time
 import shutil
 import argparse
@@ -32,11 +33,74 @@ from datetime import datetime
 # ---------------------------------------------------------------------------
 DEFAULT_MODEL = "claude-opus-4.6"
 DEFAULT_DELAY = 30  # seconds between iterations
+AGENT_DIR = Path(__file__).resolve().parent
+CONFIG_FILE = AGENT_DIR / "CoderAgentConfig.yaml"
+CONFIG_EXAMPLE = AGENT_DIR / "CoderAgentConfig.example.yaml"
 
 # Force UTF-8 on Windows
 if sys.platform == "win32":
     os.system("chcp 65001 > nul 2>&1")
     os.environ["PYTHONIOENCODING"] = "utf-8"
+
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+_PLACEHOLDER = "XXXXXXXXXXXXXXXXXX"
+
+
+def _parse_simple_yaml(text: str) -> dict[str, str]:
+    """Parse a flat key: value YAML file (no nested structures)."""
+    result = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)", line)
+        if m:
+            result[m.group(1)] = m.group(2).strip().strip("'\"")
+    return result
+
+
+def load_config() -> dict[str, str]:
+    """Load CoderAgentConfig.yaml, creating it from the example if needed.
+
+    Returns the parsed config dict.  Exits with instructions if the token
+    is still the placeholder value.
+    """
+    if not CONFIG_FILE.exists():
+        if CONFIG_EXAMPLE.exists():
+            shutil.copy2(CONFIG_EXAMPLE, CONFIG_FILE)
+            print(f"Created {CONFIG_FILE.name} from example template.")
+            print(f"Please edit {CONFIG_FILE} and set your GitHub token,")
+            print("then re-run the agent.")
+            sys.exit(1)
+        else:
+            print(f"ERROR: Neither {CONFIG_FILE.name} nor "
+                  f"{CONFIG_EXAMPLE.name} found in {AGENT_DIR}",
+                  file=sys.stderr)
+            sys.exit(1)
+
+    cfg = _parse_simple_yaml(CONFIG_FILE.read_text(encoding="utf-8"))
+
+    token = cfg.get("github_token", "")
+    if not token or token == _PLACEHOLDER:
+        print(f"ERROR: github_token in {CONFIG_FILE.name} is not set.")
+        print(f"Please edit {CONFIG_FILE} and replace the placeholder "
+              f"with your GitHub personal access token.")
+        print("Generate one at: https://github.com/settings/tokens")
+        sys.exit(1)
+
+    return cfg
+
+
+def apply_config(cfg: dict[str, str]):
+    """Push config values into the environment so downstream tools pick them up."""
+    token = cfg.get("github_token", "")
+    if token and token != _PLACEHOLDER:
+        os.environ["GH_TOKEN"] = token
+        # Also set for git credential helpers that honour this variable
+        os.environ["GITHUB_TOKEN"] = token
 
 
 # ---------------------------------------------------------------------------
@@ -258,56 +322,82 @@ def _ensure_gh_ready():
         print("  GitHub CLI is NOT authenticated")
         print("=" * 60)
         print()
-        print("  You need to log in before the agent can use Copilot.")
+        print("  The token in CoderAgentConfig.yaml may be invalid or expired.")
         print()
-        print("  OPTION A  (interactive — browser or device code):")
-        print("      gh auth login")
-        print()
-        print("  OPTION B  (non-interactive — use a personal access token):")
-        print("      export GH_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx")
-        print("      gh auth status          # verify it works")
-        print()
-        print("  Scopes required: 'copilot' (for Copilot access)")
-        print("  Generate a token at: https://github.com/settings/tokens")
+        print("  1. Generate a new token at: https://github.com/settings/tokens")
+        print("     Required scope: 'copilot'")
+        print(f"  2. Set github_token in {CONFIG_FILE}")
+        print("  3. Re-run the agent.")
         print("=" * 60)
         sys.exit(1)
 
-    # --- Check that 'gh copilot' works (built-in in newer gh, extension in older) ---
+    # --- Ensure Copilot CLI is downloaded and working ---
+    print("Checking Copilot CLI...")
+
+    # First, trigger the auto-download by running 'gh copilot' bare.
+    # This is what downloads the CLI binary on first use.
     try:
         r = subprocess.run(
-            [gh, "copilot", "--help"],
-            capture_output=True, text=True, timeout=15,
+            [gh, "copilot", "--", "--version"],
+            capture_output=True, text=True, timeout=120,
         )
         has_copilot = r.returncode == 0
     except Exception:
         has_copilot = False
 
     if not has_copilot:
-        # Try installing as extension (works for older gh versions)
-        print("'gh copilot' not available. Trying to install as extension...")
+        # Trigger download explicitly with bare 'gh copilot'
+        print("  Downloading Copilot CLI...")
         try:
             r = subprocess.run(
-                [gh, "extension", "install", "github/gh-copilot"],
+                [gh, "copilot"],
                 capture_output=True, text=True, timeout=120,
             )
-            if r.returncode == 0:
-                print("  Copilot extension installed.\n")
-                return
         except Exception:
             pass
+        # Re-check
+        try:
+            r = subprocess.run(
+                [gh, "copilot", "--", "--version"],
+                capture_output=True, text=True, timeout=120,
+            )
+            has_copilot = r.returncode == 0
+        except Exception:
+            has_copilot = False
 
-        print()
-        print("=" * 60)
-        print("  'gh copilot' is not available")
-        print("=" * 60)
-        print()
-        print("  Your version of gh may be too old. Update it:")
-        print("      gh upgrade    (or reinstall the latest gh)")
-        print()
-        print("  Or try installing the copilot extension manually:")
-        print("      gh extension install github/gh-copilot")
-        print("=" * 60)
-        sys.exit(1)
+    if has_copilot:
+        version = r.stdout.strip() or r.stderr.strip()
+        if version:
+            print(f"  Copilot CLI: {version}")
+        return
+
+    # Try running bare 'gh copilot' which triggers auto-download
+    print("Copilot CLI not found. Triggering download via gh...")
+    try:
+        r = subprocess.run(
+            [gh, "copilot", "--", "--help"],
+            capture_output=True, text=True, timeout=120,
+        )
+        if r.returncode == 0:
+            print("  Copilot CLI downloaded successfully.\n")
+            return
+    except Exception:
+        pass
+
+    print()
+    print("=" * 60)
+    print("  'gh copilot' could not download the Copilot CLI")
+    print("=" * 60)
+    print()
+    print("  gh should auto-download it, but this may fail if:")
+    print("    - You are not authenticated (run: gh auth login)")
+    print("    - Your architecture is not amd64 or arm64")
+    print("    - Network issues prevented the download")
+    print()
+    print("  Try running manually to see the error:")
+    print("      gh copilot")
+    print("=" * 60)
+    sys.exit(1)
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -434,6 +524,7 @@ def run_copilot(prompt: str, *, copilot_cli: str, model: str,
 
     cmd = [
         copilot_cli, "copilot",
+        "--",
         "--model", model,
         "--allow-all-tools",
         "--allow-all-paths",
@@ -531,6 +622,10 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Load config (token, etc.) and push into environment
+    cfg = load_config()
+    apply_config(cfg)
 
     # Auto-install missing dependencies
     ensure_dependencies()
