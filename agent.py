@@ -23,6 +23,8 @@ import os
 import time
 import shutil
 import argparse
+import select
+import threading
 from pathlib import Path
 from datetime import datetime
 
@@ -33,6 +35,8 @@ from setup import run_setup
 # ---------------------------------------------------------------------------
 DEFAULT_MODEL = "claude-opus-4.6"
 DEFAULT_DELAY = 30  # seconds between iterations
+DEFAULT_IDLE_TIMEOUT = 300  # kill if no output for 5 minutes
+DEFAULT_ITERATION_TIMEOUT = 3600  # kill after 60 minutes total per iteration
 
 # Force UTF-8 on Windows
 if sys.platform == "win32":
@@ -147,10 +151,17 @@ def build_full_prompt(user_prompt: str, iteration: int) -> str:
 
 def run_copilot(prompt: str, *, copilot_cli: str, model: str,
                 work_dir: Path, extra_dirs: list[Path],
-                iteration: int) -> int:
+                iteration: int,
+                idle_timeout: int = DEFAULT_IDLE_TIMEOUT,
+                iteration_timeout: int = DEFAULT_ITERATION_TIMEOUT) -> int:
     """Invoke the Copilot CLI with the given prompt.
 
     Returns the process exit code.
+
+    Protections against hanging:
+      - stdin is /dev/null so the agent can never block on user input
+      - idle_timeout kills the process if no output for N seconds
+      - iteration_timeout kills the process after N seconds total
     """
     # Write the prompt to a temp file to avoid command-line length limits
     prompt_dir = work_dir / "logs"
@@ -187,6 +198,7 @@ def run_copilot(prompt: str, *, copilot_cli: str, model: str,
         proc = subprocess.Popen(
             cmd,
             cwd=str(work_dir),
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -196,12 +208,47 @@ def run_copilot(prompt: str, *, copilot_cli: str, model: str,
         )
 
         output_lines = []
+        iteration_start = time.monotonic()
+        last_output_time = time.monotonic()
+        timed_out = False
+        timeout_reason = ""
+
+        def _read_output():
+            """Read stdout in a background thread to allow timeout checks."""
+            nonlocal last_output_time
+            try:
+                for line in proc.stdout:
+                    output_lines.append(line)
+                    last_output_time = time.monotonic()
+                    print(line, end="")
+                    log(line.rstrip())
+            except ValueError:
+                pass  # stdout closed
+
+        reader = threading.Thread(target=_read_output, daemon=True)
+        reader.start()
+
         try:
-            for line in proc.stdout:
-                print(line, end="")
-                log(line.rstrip())
-                output_lines.append(line)
-            proc.wait()
+            while reader.is_alive():
+                reader.join(timeout=5)
+                now = time.monotonic()
+
+                # Check idle timeout
+                if idle_timeout > 0 and (now - last_output_time) > idle_timeout:
+                    timed_out = True
+                    timeout_reason = (
+                        f"No output for {idle_timeout}s (idle timeout)"
+                    )
+                    break
+
+                # Check iteration timeout
+                if iteration_timeout > 0 and (now - iteration_start) > iteration_timeout:
+                    timed_out = True
+                    timeout_reason = (
+                        f"Iteration exceeded {iteration_timeout}s (iteration timeout)"
+                    )
+                    break
+
         except KeyboardInterrupt:
             print("\n\nTerminating Copilot subprocess...")
             proc.terminate()
@@ -212,8 +259,25 @@ def run_copilot(prompt: str, *, copilot_cli: str, model: str,
                 proc.wait()
             raise
 
+        if timed_out:
+            msg = f"TIMEOUT: {timeout_reason} — killing iteration {iteration}"
+            print(f"\n{msg}")
+            log(msg)
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            reader.join(timeout=5)
+        else:
+            proc.wait()
+
         output = "".join(output_lines)
         log_section(f"OUTPUT (iteration {iteration})", output)
+
+        if timed_out:
+            return 1
 
         if proc.returncode != 0:
             msg = f"Copilot CLI exited with code {proc.returncode}"
@@ -271,6 +335,14 @@ def main():
         "--dry-run", action="store_true",
         help="Print the full prompt and exit without running Copilot",
     )
+    parser.add_argument(
+        "--idle-timeout", type=int, default=DEFAULT_IDLE_TIMEOUT, metavar="SECONDS",
+        help=f"Kill if no output for this many seconds (default: {DEFAULT_IDLE_TIMEOUT}, 0=disabled)",
+    )
+    parser.add_argument(
+        "--iteration-timeout", type=int, default=DEFAULT_ITERATION_TIMEOUT, metavar="SECONDS",
+        help=f"Max seconds per iteration (default: {DEFAULT_ITERATION_TIMEOUT}, 0=disabled)",
+    )
 
     args = parser.parse_args()
 
@@ -308,6 +380,8 @@ def main():
     print(f"Extra dirs:    {extra_dirs or '(none)'}")
     print(f"Model:         {args.model}")
     print(f"Delay:         {args.delay}s")
+    print(f"Idle timeout:  {args.idle_timeout}s")
+    print(f"Iter timeout:  {args.iteration_timeout}s")
     print(f"Max iters:     {args.max_iterations or 'unlimited'}")
     print(f"Log file:      {log_path}")
     print()
@@ -338,6 +412,8 @@ def main():
                 work_dir=work_dir,
                 extra_dirs=extra_dirs,
                 iteration=iteration,
+                idle_timeout=args.idle_timeout,
+                iteration_timeout=args.iteration_timeout,
             )
 
             # Report commit status
