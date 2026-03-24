@@ -196,12 +196,22 @@ def run_copilot(prompt: str, *, copilot_cli: str, model: str,
         )
 
         output_lines = []
-        for line in proc.stdout:
-            print(line, end="")
-            log(line.rstrip())
-            output_lines.append(line)
+        try:
+            for line in proc.stdout:
+                print(line, end="")
+                log(line.rstrip())
+                output_lines.append(line)
+            proc.wait()
+        except KeyboardInterrupt:
+            print("\n\nTerminating Copilot subprocess...")
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            raise
 
-        proc.wait()
         output = "".join(output_lines)
         log_section(f"OUTPUT (iteration {iteration})", output)
 
