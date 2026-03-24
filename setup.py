@@ -69,7 +69,18 @@ def load_config() -> dict[str, str]:
         print(f"ERROR: github_token in {CONFIG_FILE.name} is not set.")
         print(f"Please edit {CONFIG_FILE} and replace the placeholder "
               f"with your GitHub personal access token.")
-        print("Generate one at: https://github.com/settings/tokens")
+        print("Generate one at: https://github.com/settings/personal-access-tokens/new")
+        sys.exit(1)
+
+    if token.startswith("ghp_"):
+        print("=" * 60)
+        print("  WARNING: Classic PATs (ghp_) are NOT supported by the Copilot CLI.")
+        print("  Please replace your token with a Fine-Grained PAT (github_pat_).")
+        print()
+        print("  Generate one at: https://github.com/settings/personal-access-tokens/new")
+        print("  Required: Account permissions → GitHub Copilot → Read-only")
+        print(f"  Update: {CONFIG_FILE}")
+        print("=" * 60)
         sys.exit(1)
 
     return cfg
@@ -86,6 +97,9 @@ def apply_config(cfg: dict[str, str]):
     if not token or token == _PLACEHOLDER:
         return
 
+    # Always set GH_TOKEN so it's available even if gh is installed later
+    os.environ["GH_TOKEN"] = token
+
     gh = shutil.which("gh")
     if not gh:
         return  # gh not installed yet — ensure_dependencies() handles this
@@ -93,7 +107,8 @@ def apply_config(cfg: dict[str, str]):
     print("Authenticating gh CLI with config token...")
     try:
         r = subprocess.run(
-            [gh, "auth", "login", "--with-token"],
+            [gh, "auth", "login", "--hostname", "github.com",
+             "--git-protocol", "https", "--with-token"],
             input=token,
             capture_output=True, text=True, timeout=30,
         )
@@ -283,10 +298,13 @@ def _ensure_gh_ready():
         print()
         print("  The token in CoderAgentConfig.yaml may be invalid or expired.")
         print()
-        print("  1. Generate a new token at: https://github.com/settings/tokens")
-        print("     Required scope: 'copilot'")
-        print(f"  2. Set github_token in {CONFIG_FILE}")
-        print("  3. Re-run the agent.")
+        print("  NOTE: Classic PATs (ghp_) are NOT supported by the Copilot CLI.")
+        print("  You must use a Fine-Grained PAT (github_pat_).")
+        print()
+        print("  1. Go to: https://github.com/settings/personal-access-tokens/new")
+        print("  2. Under Account permissions, enable: GitHub Copilot → Read-only")
+        print(f"  3. Set github_token in {CONFIG_FILE}")
+        print("  4. Re-run the agent.")
         print("=" * 60)
         sys.exit(1)
 
@@ -296,29 +314,11 @@ def _ensure_gh_ready():
     try:
         r = subprocess.run(
             [gh, "copilot", "--", "--version"],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True, text=True, timeout=30,
         )
         has_copilot = r.returncode == 0
     except Exception:
         has_copilot = False
-
-    if not has_copilot:
-        print("  Downloading Copilot CLI...")
-        try:
-            r = subprocess.run(
-                [gh, "copilot"],
-                capture_output=True, text=True, timeout=120,
-            )
-        except Exception:
-            pass
-        try:
-            r = subprocess.run(
-                [gh, "copilot", "--", "--version"],
-                capture_output=True, text=True, timeout=120,
-            )
-            has_copilot = r.returncode == 0
-        except Exception:
-            has_copilot = False
 
     if has_copilot:
         version = r.stdout.strip() or r.stderr.strip()
@@ -326,32 +326,121 @@ def _ensure_gh_ready():
             print(f"  Copilot CLI: {version}")
         return
 
-    print("Copilot CLI not found. Triggering download via gh...")
+    # gh copilot auto-download is broken in non-interactive mode.
+    # Download the binary ourselves from github/copilot-cli releases.
+    print("  Copilot CLI not found. Downloading from github/copilot-cli...")
+    _install_copilot_cli(gh)
+
+    # Verify
     try:
         r = subprocess.run(
-            [gh, "copilot", "--", "--help"],
-            capture_output=True, text=True, timeout=120,
+            [gh, "copilot", "--", "--version"],
+            capture_output=True, text=True, timeout=30,
         )
         if r.returncode == 0:
-            print("  Copilot CLI downloaded successfully.\n")
+            version = r.stdout.strip() or r.stderr.strip()
+            print(f"  Copilot CLI: {version}")
             return
     except Exception:
         pass
 
     print()
     print("=" * 60)
-    print("  'gh copilot' could not download the Copilot CLI")
+    print("  Could not install the Copilot CLI")
     print("=" * 60)
     print()
-    print("  gh should auto-download it, but this may fail if:")
-    print("    - You are not authenticated (run: gh auth login)")
-    print("    - Your architecture is not amd64 or arm64")
-    print("    - Network issues prevented the download")
-    print()
-    print("  Try running manually to see the error:")
-    print("      gh copilot")
+    print("  Try installing manually:")
+    if platform.system() == "Windows":
+        print("      gh release download -R github/copilot-cli -p copilot-win32-x64.zip")
+        print("      Expand-Archive copilot-win32-x64.zip .")
+        print("      Move copilot.exe to a directory on your PATH")
+    else:
+        print("      gh release download -R github/copilot-cli -p copilot-linux-x64.tar.gz")
+        print("      tar xzf copilot-linux-x64.tar.gz")
+        print("      mv copilot /usr/local/bin/copilot && chmod +x /usr/local/bin/copilot")
     print("=" * 60)
     sys.exit(1)
+
+
+def _install_copilot_cli(gh: str):
+    """Download the Copilot CLI binary from github/copilot-cli releases."""
+    import tempfile
+    import zipfile
+
+    machine = platform.machine().lower()
+    system = platform.system().lower()
+
+    arch_map = {"x86_64": "x64", "amd64": "x64", "aarch64": "arm64", "arm64": "arm64"}
+    arch = arch_map.get(machine)
+    if not arch:
+        print(f"  ERROR: Unsupported architecture: {machine}", file=sys.stderr)
+        return
+
+    if system == "linux":
+        asset = f"copilot-linux-{arch}.tar.gz"
+    elif system == "darwin":
+        asset = f"copilot-darwin-{arch}.tar.gz"
+    elif system == "windows":
+        asset = f"copilot-win32-{arch}.zip"
+    else:
+        print(f"  ERROR: Unsupported platform: {system}", file=sys.stderr)
+        return
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        print(f"  Downloading {asset}...")
+        try:
+            r = subprocess.run(
+                [gh, "release", "download", "--repo", "github/copilot-cli",
+                 "--pattern", asset, "--dir", tmpdir],
+                capture_output=True, text=True, timeout=120,
+            )
+            if r.returncode != 0:
+                err = r.stderr.strip() or r.stdout.strip()
+                print(f"  ERROR: Download failed: {err}", file=sys.stderr)
+                return
+        except Exception as e:
+            print(f"  ERROR: Download failed: {e}", file=sys.stderr)
+            return
+
+        asset_path = Path(tmpdir) / asset
+
+        # Extract
+        if asset.endswith(".tar.gz"):
+            subprocess.run(["tar", "xzf", str(asset_path), "-C", tmpdir],
+                           timeout=30)
+        elif asset.endswith(".zip"):
+            with zipfile.ZipFile(str(asset_path), "r") as zf:
+                zf.extractall(tmpdir)
+
+        binary_name = "copilot.exe" if system == "windows" else "copilot"
+        binary = Path(tmpdir) / binary_name
+
+        if not binary.exists():
+            print("  ERROR: Expected binary not found after extraction",
+                  file=sys.stderr)
+            return
+
+        # Choose install directory
+        if system == "windows":
+            # %LOCALAPPDATA%\Programs\copilot  (user-local, no admin needed)
+            install_dir = Path(os.environ.get("LOCALAPPDATA",
+                               Path.home() / "AppData" / "Local")) / "Programs" / "copilot"
+        else:
+            install_dir = Path("/usr/local/bin")
+            if not os.access(str(install_dir), os.W_OK):
+                install_dir = Path.home() / ".local" / "bin"
+
+        install_dir.mkdir(parents=True, exist_ok=True)
+        dest = install_dir / binary_name
+        shutil.copy2(str(binary), str(dest))
+        if system != "windows":
+            dest.chmod(0o755)
+        print(f"  Installed copilot to {dest}")
+
+        # Ensure the install dir is on PATH
+        if str(install_dir) not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = str(install_dir) + os.pathsep + os.environ.get("PATH", "")
+            print(f"  Added {install_dir} to PATH")
 
 
 def ensure_dependencies():
