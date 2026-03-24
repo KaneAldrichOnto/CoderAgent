@@ -4,7 +4,7 @@ A lightweight wrapper that runs a [GitHub Copilot CLI](https://docs.github.com/e
 
 ## Quick Start
 
-```powershell
+```bash
 # 1. Clone the repo
 git clone https://github.com/KaneAldrichOnto/CoderAgent.git
 cd CoderAgent
@@ -14,10 +14,11 @@ cd CoderAgent
 python setup.py
 
 # 3. Edit prompt.md with your task
-notepad prompt.md
+#    Windows: notepad prompt.md
+#    Linux:   nano prompt.md
 
 # 4. Run the agent against a project
-python agent.py --prompt prompt.md --dir ..\MyProject
+python agent.py --prompt prompt.md --dir ../MyProject
 
 # 5. Stop whenever you want
 #    Press Ctrl-C
@@ -28,27 +29,49 @@ python agent.py --prompt prompt.md --dir ..\MyProject
 On first run, `setup.py` (called automatically by `agent.py`) will:
 
 1. **Create `CoderAgentConfig.yaml`** from the example template if it doesn't exist.
-2. **Authenticate the GitHub CLI** with your token.
-3. **Install missing dependencies** (`git`, `gh`) via `winget` (Windows) or `apt`/`dnf` (Linux).
-4. **Download the Copilot CLI** if not already present.
+2. **Validate your token** — rejects classic PATs (`ghp_`) early with a clear message.
+3. **Set `GH_TOKEN`** in the environment and authenticate the GitHub CLI.
+4. **Install missing dependencies** (`git`, `gh`) via `winget` (Windows) or `apt`/`dnf` (Linux).
+5. **Download the Copilot CLI** binary from `github/copilot-cli` releases if not already present.
 
 ### Generating a GitHub Token
 
-1. Go to **https://github.com/settings/tokens/new** (classic token).
+> **Important:** The Copilot CLI does **not** accept classic personal access tokens (`ghp_`).
+> You **must** use a **Fine-Grained Personal Access Token** (`github_pat_`).
+
+1. Go to **https://github.com/settings/personal-access-tokens/new**.
 2. Give it a descriptive name (e.g., `CoderAgent`).
-3. Check these scopes:
-   - **`copilot`** — required for Copilot CLI access
-   - **`repo`** — required to push/pull private repositories
-   - **`read:org`** — required by `gh auth login`
-4. Click **Generate token** and copy it.
-5. Paste the token into `CoderAgentConfig.yaml`:
+3. Set an expiration date.
+4. Under **Account permissions**, enable:
+   - **GitHub Copilot** → **Read-only**
+5. Click **Generate token** and copy it.
+6. Paste the token into `CoderAgentConfig.yaml`:
    ```yaml
-   github_token: ghp_your_token_here
+   github_token: github_pat_your_token_here
    ```
 
 > **Note:** `CoderAgentConfig.yaml` is git-ignored — your token will not be committed.
 
 You can also run `python setup.py` standalone to verify everything is configured correctly without starting the agent loop.
+
+## Platform Support
+
+The setup process is fully automated on both Windows and Linux (including Docker containers).
+
+| Step | Windows | Linux / Docker |
+|---|---|---|
+| Install `git` | `winget` | `apt-get` / `dnf` / `pacman` (with and without `sudo`) |
+| Install `gh` CLI | `winget` | GitHub's official APT repo |
+| Download Copilot CLI | `copilot-win32-x64.zip` → `%LOCALAPPDATA%\Programs\copilot` | `copilot-linux-x64.tar.gz` → `/usr/local/bin` (or `~/.local/bin`) |
+| Auth | `gh auth login --with-token` + `GH_TOKEN` env var | Same (env var ensures it works without a keyring) |
+
+### Running in Docker
+
+When running inside a Docker container (e.g., the included `ModelTraining/.devcontainer/Dockerfile`):
+
+- The `GH_TOKEN` environment variable is set **before** `gh` is installed, so authentication works immediately after install.
+- `apt-get` commands run without `sudo` (root in container) — this is handled automatically.
+- The Copilot CLI is downloaded directly via `gh release download` since `gh copilot`'s auto-download doesn't work in non-interactive mode.
 
 ## How It Works
 
@@ -102,12 +125,12 @@ python agent.py --prompt <FILE> [options]
 
 ### Examples
 
-```powershell
+```bash
 # Unlimited loop, 15 s delay, two directories visible to the agent
-python agent.py --prompt prompt.md --dir ..\MyProject --dir ..\SharedLib --delay 15
+python agent.py --prompt prompt.md --dir ../MyProject --dir ../SharedLib --delay 15
 
 # Single shot
-python agent.py --prompt prompt.md --dir ..\MyProject --once
+python agent.py --prompt prompt.md --dir ../MyProject --once
 
 # Preview the prompt without running
 python agent.py --prompt prompt.md --dry-run
@@ -134,10 +157,21 @@ The prompt is plain Markdown — include code blocks, links, file paths, or anyt
 
 - **Python 3.10+**
 - **A GitHub account** with Copilot access
+- **A Fine-Grained Personal Access Token** (`github_pat_`) — classic tokens (`ghp_`) are **not supported**
 - **Windows:** `winget` (ships with Windows 10/11) — used to auto-install `git` and `gh` if missing
 - **Linux:** `apt-get`, `dnf`, or `pacman` — used to auto-install `git` and `gh` if missing
 
-Everything else (`git`, `gh` CLI, Copilot CLI) is installed automatically by `setup.py` on first run.
+Everything else (`git`, `gh` CLI, Copilot CLI binary) is installed automatically by `setup.py` on first run.
+
+## Troubleshooting
+
+| Problem | Solution |
+|---|---|
+| `Classic Personal Access Tokens (ghp_) are not supported` | Replace your token with a fine-grained PAT from https://github.com/settings/personal-access-tokens/new |
+| `GitHub CLI is NOT authenticated` | Your token may be invalid or expired. Generate a new one and update `CoderAgentConfig.yaml`. |
+| `Could not install the Copilot CLI` | Run `gh release download -R github/copilot-cli -p copilot-linux-x64.tar.gz` manually, extract, and place `copilot` on your PATH. |
+| `Permission denied` writing files | Inside Docker you're root; on the host, ensure your user owns the CoderAgent directory: `sudo chown -R $(whoami) .` |
+| `gh auth login` fails in Docker | The `GH_TOKEN` env var is set automatically from your config. If it still fails, check your token hasn't expired. |
 
 ## Logs
 
