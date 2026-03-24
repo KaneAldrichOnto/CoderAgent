@@ -3,3 +3,5 @@ CoderAgentConfig.yaml
 
 # Agent logs
 logs/
+
+__pycache__/*

@@ -5,15 +5,50 @@ A lightweight wrapper that runs a [GitHub Copilot CLI](https://docs.github.com/e
 ## Quick Start
 
 ```powershell
-# 1. Edit prompt.md with your task
+# 1. Clone the repo
+git clone https://github.com/KaneAldrichOnto/CoderAgent.git
+cd CoderAgent
+
+# 2. Set up your GitHub token (see "Setup" below)
+#    This creates CoderAgentConfig.yaml from the template
+python setup.py
+
+# 3. Edit prompt.md with your task
 notepad prompt.md
 
-# 2. Run the agent against a project
+# 4. Run the agent against a project
 python agent.py --prompt prompt.md --dir ..\MyProject
 
-# 3. Stop whenever you want
+# 5. Stop whenever you want
 #    Press Ctrl-C
 ```
+
+## Setup
+
+On first run, `setup.py` (called automatically by `agent.py`) will:
+
+1. **Create `CoderAgentConfig.yaml`** from the example template if it doesn't exist.
+2. **Authenticate the GitHub CLI** with your token.
+3. **Install missing dependencies** (`git`, `gh`) via `winget` (Windows) or `apt`/`dnf` (Linux).
+4. **Download the Copilot CLI** if not already present.
+
+### Generating a GitHub Token
+
+1. Go to **https://github.com/settings/tokens/new** (classic token).
+2. Give it a descriptive name (e.g., `CoderAgent`).
+3. Check these scopes:
+   - **`copilot`** — required for Copilot CLI access
+   - **`repo`** — required to push/pull private repositories
+   - **`read:org`** — required by `gh auth login`
+4. Click **Generate token** and copy it.
+5. Paste the token into `CoderAgentConfig.yaml`:
+   ```yaml
+   github_token: ghp_your_token_here
+   ```
+
+> **Note:** `CoderAgentConfig.yaml` is git-ignored — your token will not be committed.
+
+You can also run `python setup.py` standalone to verify everything is configured correctly without starting the agent loop.
 
 ## How It Works
 
@@ -98,8 +133,11 @@ The prompt is plain Markdown — include code blocks, links, file paths, or anyt
 ## Prerequisites
 
 - **Python 3.10+**
-- **GitHub Copilot CLI** installed and authenticated (`copilot` on PATH)
-- **Git** (for commit tracking)
+- **A GitHub account** with Copilot access
+- **Windows:** `winget` (ships with Windows 10/11) — used to auto-install `git` and `gh` if missing
+- **Linux:** `apt-get`, `dnf`, or `pacman` — used to auto-install `git` and `gh` if missing
+
+Everything else (`git`, `gh` CLI, Copilot CLI) is installed automatically by `setup.py` on first run.
 
 ## Logs
 
