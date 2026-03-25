@@ -71,7 +71,7 @@ The setup process is fully automated on both Windows and Linux (including Docker
 
 ### Running in Docker
 
-When running inside a Docker container (e.g., the included `ModelTraining/.devcontainer/Dockerfile`):
+When running inside a Docker container:
 
 - The `GH_TOKEN` environment variable is set **before** `gh` is installed, so authentication works immediately after install.
 - `apt-get` commands run without `sudo` (root in container) — this is handled automatically.
