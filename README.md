@@ -13,11 +13,15 @@ cd CoderAgent
 #    This creates CoderAgentConfig.yaml from the template
 python setup.py
 
-# 3. Edit prompt.md with your task
+# 3. Create your prompt (auto-copies from prompt.example.md on first run)
+#    Just run the agent — it will create prompt.md and ask you to edit it
+python agent.py --prompt prompt.md --dir ../MyProject
+
+# 4. Edit prompt.md with your task
 #    Windows: notepad prompt.md
 #    Linux:   nano prompt.md
 
-# 4. Run the agent against a project
+# 5. Run the agent again
 python agent.py --prompt prompt.md --dir ../MyProject
 
 # 5. Stop whenever you want
@@ -76,8 +80,14 @@ When running inside a Docker container (e.g., the included `ModelTraining/.devco
 ## How It Works
 
 ```
+┌─────────────────────┐
+│ prompt.example.md   │──(copied to prompt.md on first run)
+└─────────────────────┘
+         │
+         ▼
 ┌──────────────┐
 │  prompt.md   │──(re-read each iteration)──┐
+│  (git-ignored)│                            │
 └──────────────┘                             │
                                              ▼
                                    ┌──────────────────┐
@@ -102,7 +112,7 @@ When running inside a Docker container (e.g., the included `ModelTraining/.devco
 | Feature | Detail |
 |---|---|
 | **Loop** | Runs indefinitely until Ctrl-C (or `--max-iterations N`). |
-| **Live editing** | `prompt.md` is re-read every iteration — edit it while the agent runs to steer behavior. |
+| **Live editing** | `prompt.md` is re-read every iteration — edit it while the agent runs to steer behavior. Your prompts are git-ignored and never committed. |
 | **Logging** | Full prompts and Copilot output are saved to `logs/agent_<timestamp>.log` inside the working directory. |
 | **Commit tracking** | After each iteration the script checks `git log` and warns if the agent didn't commit. |
 | **Housekeeping wrapper** | A small wrapper is appended to your prompt reminding the agent to commit regularly and stay on task. |
@@ -138,7 +148,23 @@ python agent.py --prompt prompt.md --dry-run
 
 ## Writing a Prompt
 
-Open `prompt.md` (a starter template is included) and fill in four sections:
+The repo includes `prompt.example.md` — a starter template with placeholder sections.
+**Your actual prompts go in `prompt.md`**, which is git-ignored and never committed.
+
+### How it works
+
+1. On first run, if `prompt.md` doesn't exist, the agent **automatically copies
+   `prompt.example.md` → `prompt.md`** and exits, asking you to edit it.
+2. You fill in your task in `prompt.md` and run the agent again.
+3. `prompt.md` is re-read every iteration, so you can edit it while the agent runs.
+4. Since `prompt.md` is git-ignored, your task-specific prompts stay local and are
+   never pushed to the repo.
+
+> **Note:** Only `prompt.example.md` is committed. If you want to improve the
+> template for everyone, edit `prompt.example.md`. Never put sensitive or
+> project-specific details in the example file.
+
+Fill in four sections in your prompt:
 
 1. **Goal** — what the agent should accomplish.
 2. **Context** — which files/directories to read first.
