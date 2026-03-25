@@ -181,12 +181,35 @@ def load_prompt(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def build_full_prompt(user_prompt: str, iteration: int) -> str:
-    """Wrap the user prompt with housekeeping instructions."""
+def load_scratchpad(work_dir: Path) -> str:
+    """Read the agent scratchpad file, or return '' if it doesn't exist yet."""
+    pad = work_dir / "agent_scratchpad.md"
+    if pad.exists():
+        return pad.read_text(encoding="utf-8")
+    return ""
+
+
+def build_full_prompt(user_prompt: str, iteration: int,
+                      scratchpad: str) -> str:
+    """Wrap the user prompt with scratchpad contents and housekeeping."""
+    scratchpad_section = ""
+    if scratchpad.strip():
+        scratchpad_section = (
+            "\n---\n\n"
+            "## Scratchpad (notes from your previous iteration)\n\n"
+            f"{scratchpad}\n"
+        )
+    else:
+        scratchpad_section = (
+            "\n---\n\n"
+            "## Scratchpad\n\n"
+            "*(empty — this is the first iteration, or no notes were saved)*\n"
+        )
+
     return f"""## Iteration {iteration}
 
 {user_prompt}
-
+{scratchpad_section}
 ---
 
 ## Housekeeping (always follow these)
@@ -200,6 +223,13 @@ def build_full_prompt(user_prompt: str, iteration: int) -> str:
    unrelated code or add features that were not requested.
 4. **Stop when done.** If there is nothing left to do, say "TASK COMPLETE" and
    stop.
+5. **Update the scratchpad.** Before stopping, write notes to
+   `agent_scratchpad.md` in the working directory.  Include:
+   - What you accomplished this iteration
+   - What still needs to be done
+   - Any problems, blockers, or decisions for the next iteration
+   - Key file paths or context the next iteration will need
+   Do NOT commit this file — it is git-ignored.
 """
 
 
@@ -419,7 +449,8 @@ def main():
 
     # Dry run
     if args.dry_run:
-        full = build_full_prompt(user_prompt, iteration=1)
+        scratchpad = load_scratchpad(work_dir)
+        full = build_full_prompt(user_prompt, iteration=1, scratchpad=scratchpad)
         print(full)
         sys.exit(0)
 
@@ -460,7 +491,8 @@ def main():
 
             # Re-read prompt each iteration so the user can edit it live
             user_prompt = load_prompt(prompt_path)
-            full_prompt = build_full_prompt(user_prompt, iteration)
+            scratchpad = load_scratchpad(work_dir)
+            full_prompt = build_full_prompt(user_prompt, iteration, scratchpad)
 
             commit_before = git_head(work_dir)
 

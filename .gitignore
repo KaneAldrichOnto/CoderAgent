@@ -7,6 +7,9 @@ prompt.md
 # Agent logs
 logs/
 
+# Agent scratchpad (inter-iteration notes)
+agent_scratchpad.md
+
 # Internal commit logs
 InternalLogs/
 
