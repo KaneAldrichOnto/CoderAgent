@@ -10,6 +10,9 @@ logs/
 # Agent scratchpad (inter-iteration notes)
 agent_scratchpad.md
 
+# Agent done signal
+.agent_done
+
 # Internal commit logs
 InternalLogs/
 

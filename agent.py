@@ -37,6 +37,7 @@ DEFAULT_MODEL = "claude-opus-4.6"
 DEFAULT_DELAY = 30  # seconds between iterations
 DEFAULT_IDLE_TIMEOUT = 300  # kill if no output for 5 minutes
 DEFAULT_ITERATION_TIMEOUT = 3600  # kill after 60 minutes total per iteration
+DONE_SIGNAL_FILE = ".agent_done"  # agent creates this file to end early
 
 # Force UTF-8 on Windows
 if sys.platform == "win32":
@@ -189,6 +190,15 @@ def load_scratchpad(work_dir: Path) -> str:
     return ""
 
 
+def check_done_signal(work_dir: Path) -> bool:
+    """Check if the agent signalled task completion; remove the file if found."""
+    signal = work_dir / DONE_SIGNAL_FILE
+    if signal.exists():
+        signal.unlink()
+        return True
+    return False
+
+
 def build_full_prompt(user_prompt: str, iteration: int,
                       scratchpad: str) -> str:
     """Wrap the user prompt with scratchpad contents and housekeeping."""
@@ -221,8 +231,10 @@ def build_full_prompt(user_prompt: str, iteration: int,
    completing a step, summarize what was done and what remains.
 3. **Stay on task.** Focus only on the instructions above.  Do not refactor
    unrelated code or add features that were not requested.
-4. **Stop when done.** If there is nothing left to do, say "TASK COMPLETE" and
-   stop.
+4. **Stop when done.** When the task is fully complete and there is nothing left
+   to do, create an empty file called `.agent_done` in the working directory
+   (e.g. run `touch .agent_done` or write an empty file).  This signals the
+   outer loop to stop iterating.  You should still commit your work first.
 5. **Update the scratchpad.** Before stopping, write notes to
    `agent_scratchpad.md` in the working directory.  Include:
    - What you accomplished this iteration
@@ -481,6 +493,12 @@ def main():
     log(f"Model: {args.model}")
     log(f"Max iterations: {args.max_iterations or 'unlimited'}")
 
+    # Clear any stale done signal from a previous run
+    stale_signal = work_dir / DONE_SIGNAL_FILE
+    if stale_signal.exists():
+        stale_signal.unlink()
+        log("Cleared stale .agent_done signal from previous run.")
+
     iteration = 0
     try:
         while True:
@@ -506,6 +524,13 @@ def main():
                 idle_timeout=args.idle_timeout,
                 iteration_timeout=args.iteration_timeout,
             )
+
+            # Check for early-exit signal
+            if check_done_signal(work_dir):
+                msg = "Agent signalled TASK COMPLETE — stopping."
+                print(f"\n>> {msg}")
+                log(msg)
+                break
 
             # Report commit status
             commit_after = git_head(work_dir)
