@@ -100,6 +100,30 @@ def git_head(cwd: Path) -> str:
         return ""
 
 
+def git_new_commits(cwd: Path, old_sha: str, new_sha: str) -> list[tuple[str, str]]:
+    """Return a list of (hash, message) for commits between old_sha and new_sha."""
+    try:
+        r = subprocess.run(
+            ["git", "log", "--format=%H%n%B%n---END---", f"{old_sha}..{new_sha}"],
+            cwd=str(cwd), capture_output=True, text=True, timeout=10,
+        )
+        if r.returncode != 0 or not r.stdout.strip():
+            return []
+        commits = []
+        entries = r.stdout.split("---END---")
+        for entry in entries:
+            lines = entry.strip().splitlines()
+            if not lines:
+                continue
+            sha = lines[0].strip()
+            message = "\n".join(lines[1:]).strip()
+            if sha:
+                commits.append((sha, message))
+        return commits
+    except Exception:
+        return []
+
+
 def git_has_uncommitted(cwd: Path) -> bool:
     try:
         r = subprocess.run(
@@ -112,12 +136,46 @@ def git_has_uncommitted(cwd: Path) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Internal commit logging
+# ---------------------------------------------------------------------------
+AGENT_DIR = Path(__file__).resolve().parent
+INTERNAL_LOGS_DIR = AGENT_DIR / "InternalLogs"
+
+
+def init_internal_logs():
+    """Create the InternalLogs directory if it doesn't exist."""
+    INTERNAL_LOGS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def log_commits(cwd: Path, old_sha: str, new_sha: str):
+    """Write a timestamped log file for each new commit."""
+    commits = git_new_commits(cwd, old_sha, new_sha)
+    for sha, message in commits:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{stamp}_{sha[:8]}.log"
+        log_path = INTERNAL_LOGS_DIR / filename
+        log_path.write_text(
+            f"Timestamp: {datetime.now().isoformat()}\n"
+            f"Commit:    {sha}\n\n"
+            f"{message}\n",
+            encoding="utf-8",
+        )
+        log(f"Commit log written: {log_path}")
+
+
+# ---------------------------------------------------------------------------
 # Prompt handling
 # ---------------------------------------------------------------------------
 
 def load_prompt(path: Path) -> str:
-    """Read the user prompt file."""
+    """Read the user prompt file, creating it from the example template if needed."""
     if not path.exists():
+        example = path.parent / "prompt.example.md"
+        if example.exists():
+            shutil.copy2(example, path)
+            print(f"Created {path.name} from example template.")
+            print(f"Please edit {path} with your task, then re-run the agent.")
+            sys.exit(1)
         print(f"ERROR: Prompt file not found: {path}", file=sys.stderr)
         sys.exit(1)
     return path.read_text(encoding="utf-8")
@@ -374,6 +432,7 @@ def main():
     # Init logging
     log_dir = work_dir / "logs"
     log_path = init_log(log_dir)
+    init_internal_logs()
 
     print(f"Prompt:        {prompt_path}")
     print(f"Working dir:   {work_dir}")
@@ -423,6 +482,7 @@ def main():
                     msg = f"Agent committed (HEAD now {commit_after[:8]})"
                     print(f"\n>> {msg}")
                     log(msg)
+                    log_commits(work_dir, commit_before, commit_after)
                 elif git_has_uncommitted(work_dir):
                     msg = "WARNING: Agent did NOT commit. Uncommitted changes detected."
                     print(f"\n>> {msg}")

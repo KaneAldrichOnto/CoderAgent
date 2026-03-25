@@ -1,7 +1,13 @@
 # Real config with secrets — never commit
 CoderAgentConfig.yaml
 
+# Actual prompts — never commit
+prompt.md
+
 # Agent logs
 logs/
+
+# Internal commit logs
+InternalLogs/
 
 __pycache__/*
