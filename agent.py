@@ -167,6 +167,23 @@ def git_changed_files(cwd: Path, sha: str) -> list[str]:
         return []
 
 
+def git_diff_patch(cwd: Path, sha: str, max_bytes: int = 8000) -> str:
+    """Return the unified diff (patch) for a single commit, truncated if large."""
+    try:
+        r = subprocess.run(
+            ["git", "diff-tree", "--no-commit-id", "-p", "-r", sha],
+            cwd=str(cwd), capture_output=True, text=True, timeout=15,
+        )
+        if r.returncode != 0:
+            return ""
+        patch = r.stdout.strip()
+        if len(patch) > max_bytes:
+            patch = patch[:max_bytes] + "\n... (diff truncated)"
+        return patch
+    except Exception:
+        return ""
+
+
 # ---------------------------------------------------------------------------
 # Internal commit logging
 # ---------------------------------------------------------------------------
@@ -220,6 +237,7 @@ def append_commit_log(cwd: Path, old_sha: str, new_sha: str):
         stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         changed_files = git_changed_files(cwd, sha)
         diff_stat = git_diff_stat(cwd, sha)
+        patch = git_diff_patch(cwd, sha)
 
         # Split commit message into subject and body
         msg_lines = message.strip().splitlines()
@@ -241,6 +259,9 @@ def append_commit_log(cwd: Path, old_sha: str, new_sha: str):
 
         if diff_stat:
             entry += f"**Diff summary:**\n\n```\n{diff_stat}\n```\n\n"
+
+        if patch:
+            entry += f"**Changes:**\n\n```diff\n{patch}\n```\n\n"
 
         entries.append(entry)
 
@@ -612,14 +633,8 @@ def main():
                 iteration_timeout=args.iteration_timeout,
             )
 
-            # Check for early-exit signal
-            if check_done_signal(work_dir):
-                msg = "Agent signalled TASK COMPLETE — stopping."
-                print(f"\n>> {msg}")
-                log(msg)
-                break
-
-            # Report commit status
+            # Report commit status (must run before done-signal check
+            # so commits are always logged, even on the final iteration)
             commit_after = git_head(work_dir)
             if commit_after and commit_before != commit_after:
                 msg = f"Agent committed (HEAD now {commit_after[:8]})"
@@ -633,6 +648,13 @@ def main():
                 log(msg)
             else:
                 log("No commit and no uncommitted changes this iteration.")
+
+            # Check for early-exit signal
+            if check_done_signal(work_dir):
+                msg = "Agent signalled TASK COMPLETE — stopping."
+                print(f"\n>> {msg}")
+                log(msg)
+                break
 
             # Delay before next iteration
             is_last = args.max_iterations and iteration >= args.max_iterations
