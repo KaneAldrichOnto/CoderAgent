@@ -104,8 +104,13 @@ def git_head(cwd: Path) -> str:
 def git_new_commits(cwd: Path, old_sha: str, new_sha: str) -> list[tuple[str, str]]:
     """Return a list of (hash, message) for commits between old_sha and new_sha."""
     try:
+        if old_sha:
+            cmd = ["git", "log", "--format=%H%n%B%n---END---", f"{old_sha}..{new_sha}"]
+        else:
+            # No previous HEAD (first commit(s) in the repo)
+            cmd = ["git", "log", "--format=%H%n%B%n---END---", new_sha]
         r = subprocess.run(
-            ["git", "log", "--format=%H%n%B%n---END---", f"{old_sha}..{new_sha}"],
+            cmd,
             cwd=str(cwd), capture_output=True, text=True, timeout=10,
         )
         if r.returncode != 0 or not r.stdout.strip():
@@ -616,19 +621,18 @@ def main():
 
             # Report commit status
             commit_after = git_head(work_dir)
-            if commit_before and commit_after:
-                if commit_before != commit_after:
-                    msg = f"Agent committed (HEAD now {commit_after[:8]})"
-                    print(f"\n>> {msg}")
-                    log(msg)
-                    log_commits(work_dir, commit_before, commit_after)
-                    append_commit_log(work_dir, commit_before, commit_after)
-                elif git_has_uncommitted(work_dir):
-                    msg = "WARNING: Agent did NOT commit. Uncommitted changes detected."
-                    print(f"\n>> {msg}")
-                    log(msg)
-                else:
-                    log("No commit and no uncommitted changes this iteration.")
+            if commit_after and commit_before != commit_after:
+                msg = f"Agent committed (HEAD now {commit_after[:8]})"
+                print(f"\n>> {msg}")
+                log(msg)
+                log_commits(work_dir, commit_before, commit_after)
+                append_commit_log(work_dir, commit_before, commit_after)
+            elif commit_after and git_has_uncommitted(work_dir):
+                msg = "WARNING: Agent did NOT commit. Uncommitted changes detected."
+                print(f"\n>> {msg}")
+                log(msg)
+            else:
+                log("No commit and no uncommitted changes this iteration.")
 
             # Delay before next iteration
             is_last = args.max_iterations and iteration >= args.max_iterations
