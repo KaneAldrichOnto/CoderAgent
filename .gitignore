@@ -13,6 +13,9 @@ agent_scratchpad.md
 # Agent done signal
 .agent_done
 
+# Operator steering override
+steering.md
+
 # Internal commit logs
 InternalLogs/
 

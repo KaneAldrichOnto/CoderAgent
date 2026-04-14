@@ -298,6 +298,16 @@ def load_scratchpad(work_dir: Path) -> str:
     return ""
 
 
+def load_steering(work_dir: Path) -> str:
+    """Read operator override instructions from steering.md, if present."""
+    steer = work_dir / "steering.md"
+    if steer.exists():
+        content = steer.read_text(encoding="utf-8").strip()
+        if content:
+            return content
+    return ""
+
+
 def check_done_signal(work_dir: Path) -> bool:
     """Check if the agent signalled task completion; remove the file if found."""
     signal = work_dir / DONE_SIGNAL_FILE
@@ -308,8 +318,18 @@ def check_done_signal(work_dir: Path) -> bool:
 
 
 def build_full_prompt(user_prompt: str, iteration: int,
-                      scratchpad: str, last_commits: str) -> str:
+                      scratchpad: str, last_commits: str,
+                      steering: str) -> str:
     """Wrap the user prompt with scratchpad contents and housekeeping."""
+    if steering.strip():
+        steering_section = (
+            "## [OPERATOR OVERRIDE — read and follow this before anything else]\n\n"
+            f"{steering}\n\n"
+            "---\n\n"
+        )
+    else:
+        steering_section = ""
+
     if last_commits.strip():
         commit_history_section = (
             "\n---\n\n"
@@ -337,7 +357,7 @@ def build_full_prompt(user_prompt: str, iteration: int,
             "*(empty — this is the first iteration, or no notes were saved)*\n"
         )
 
-    return f"""## Iteration {iteration}
+    return f"""{steering_section}## Iteration {iteration}
 
 {user_prompt}
 {commit_history_section}
@@ -585,7 +605,7 @@ def main():
     if args.dry_run:
         scratchpad = load_scratchpad(work_dir)
         full = build_full_prompt(user_prompt, iteration=1, scratchpad=scratchpad,
-                                last_commits="")
+                                last_commits="", steering="")
         print(full)
         sys.exit(0)
 
@@ -652,6 +672,7 @@ def main():
             # Re-read prompt each iteration so the user can edit it live
             user_prompt = load_prompt(prompt_path)
             scratchpad = load_scratchpad(work_dir)
+            steering = load_steering(work_dir)
 
             # Build commit history from previous iteration
             if prev_commit_before or prev_commit_after:
@@ -662,7 +683,12 @@ def main():
             else:
                 last_commits = ""
 
-            full_prompt = build_full_prompt(user_prompt, iteration, scratchpad, last_commits)
+            full_prompt = build_full_prompt(user_prompt, iteration, scratchpad,
+                                           last_commits, steering)
+
+            if steering:
+                print(f">> Steering override active ({len(steering)} chars from steering.md)")
+                log("Steering override injected.")
 
             commit_before = git_head(work_dir)
 
