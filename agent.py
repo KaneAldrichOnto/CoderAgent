@@ -639,6 +639,7 @@ def main():
 
     iteration = 0
     consecutive_failures = 0
+    consecutive_no_progress = 0
     prev_commit_before = ""
     prev_commit_after = ""
     try:
@@ -709,6 +710,20 @@ def main():
             # Save commit info for next iteration's prompt
             prev_commit_before = commit_before
             prev_commit_after = commit_after
+
+            # Stuck detection
+            if commit_after and commit_before != commit_after:
+                consecutive_no_progress = 0
+            else:
+                consecutive_no_progress += 1
+                if consecutive_no_progress >= 3:
+                    msg = (f"WARNING: No commits for {consecutive_no_progress} consecutive "
+                           f"iteration(s). The agent may be stuck.")
+                    print(f"\n>> {msg}")
+                    log(msg)
+                    # Don't break — let the operator decide via Ctrl-C or steering.md.
+                    # But do reset the counter so the warning fires again after another 3.
+                    consecutive_no_progress = 0
 
             # Check for early-exit signal
             if check_done_signal(work_dir):
