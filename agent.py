@@ -308,8 +308,21 @@ def check_done_signal(work_dir: Path) -> bool:
 
 
 def build_full_prompt(user_prompt: str, iteration: int,
-                      scratchpad: str) -> str:
+                      scratchpad: str, last_commits: str) -> str:
     """Wrap the user prompt with scratchpad contents and housekeeping."""
+    if last_commits.strip():
+        commit_history_section = (
+            "\n---\n\n"
+            "## Commits you made last iteration (ground truth)\n\n"
+            f"{last_commits}\n"
+        )
+    else:
+        commit_history_section = (
+            "\n---\n\n"
+            "## Commits you made last iteration\n\n"
+            "*(none — either this is the first iteration or no commits were made)*\n"
+        )
+
     scratchpad_section = ""
     if scratchpad.strip():
         scratchpad_section = (
@@ -327,6 +340,7 @@ def build_full_prompt(user_prompt: str, iteration: int,
     return f"""## Iteration {iteration}
 
 {user_prompt}
+{commit_history_section}
 {scratchpad_section}
 ---
 
@@ -570,7 +584,8 @@ def main():
     # Dry run
     if args.dry_run:
         scratchpad = load_scratchpad(work_dir)
-        full = build_full_prompt(user_prompt, iteration=1, scratchpad=scratchpad)
+        full = build_full_prompt(user_prompt, iteration=1, scratchpad=scratchpad,
+                                last_commits="")
         print(full)
         sys.exit(0)
 
@@ -624,6 +639,8 @@ def main():
 
     iteration = 0
     consecutive_failures = 0
+    prev_commit_before = ""
+    prev_commit_after = ""
     try:
         while True:
             iteration += 1
@@ -634,7 +651,17 @@ def main():
             # Re-read prompt each iteration so the user can edit it live
             user_prompt = load_prompt(prompt_path)
             scratchpad = load_scratchpad(work_dir)
-            full_prompt = build_full_prompt(user_prompt, iteration, scratchpad)
+
+            # Build commit history from previous iteration
+            if prev_commit_before or prev_commit_after:
+                commits = git_new_commits(work_dir, prev_commit_before, prev_commit_after)
+                last_commits = "\n".join(
+                    f"- `{sha[:8]}` {msg.splitlines()[0]}" for sha, msg in commits
+                ) if commits else ""
+            else:
+                last_commits = ""
+
+            full_prompt = build_full_prompt(user_prompt, iteration, scratchpad, last_commits)
 
             commit_before = git_head(work_dir)
 
@@ -678,6 +705,10 @@ def main():
                 log(msg)
             else:
                 log("No commit and no uncommitted changes this iteration.")
+
+            # Save commit info for next iteration's prompt
+            prev_commit_before = commit_before
+            prev_commit_after = commit_after
 
             # Check for early-exit signal
             if check_done_signal(work_dir):
