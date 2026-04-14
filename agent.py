@@ -623,6 +623,7 @@ def main():
         log(f"Could not create rollback tag: {tag_result.stderr.strip()}")
 
     iteration = 0
+    consecutive_failures = 0
     try:
         while True:
             iteration += 1
@@ -637,7 +638,7 @@ def main():
 
             commit_before = git_head(work_dir)
 
-            run_copilot(
+            exit_code = run_copilot(
                 full_prompt,
                 copilot_cli=copilot_cli,
                 model=args.model,
@@ -647,6 +648,20 @@ def main():
                 idle_timeout=args.idle_timeout,
                 iteration_timeout=args.iteration_timeout,
             )
+
+            # Track consecutive failures
+            if exit_code != 0:
+                consecutive_failures += 1
+                msg = (f"WARNING: Copilot exited with code {exit_code} "
+                       f"({consecutive_failures} consecutive failure(s)).")
+                print(f"\n>> {msg}")
+                log(msg)
+                if consecutive_failures >= 3:
+                    print("\n>> ERROR: 3 consecutive failures — stopping to avoid a runaway loop.")
+                    log("Stopping: 3 consecutive failures.")
+                    break
+            else:
+                consecutive_failures = 0
 
             # Report commit status (must run before done-signal check
             # so commits are always logged, even on the final iteration)
