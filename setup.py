@@ -5,7 +5,8 @@ setup.py - Configuration loading, dependency installation, and environment
 Called by agent.py at startup.  Can also be run standalone to validate that
 everything is ready:
 
-    python setup.py
+    python setup.py                       # claude backend (default)
+    python setup.py --backend copilot     # legacy gh copilot backend
 """
 
 import os
@@ -141,6 +142,11 @@ _INSTALL_SPECS = {
                         "--accept-source-agreements",
                         "--accept-package-agreements"]),
         ],
+        "node": [
+            ("winget", ["winget", "install", "--id", "OpenJS.NodeJS.LTS", "-e",
+                        "--accept-source-agreements",
+                        "--accept-package-agreements"]),
+        ],
     },
     "Linux": {
         "git": [
@@ -169,6 +175,18 @@ _INSTALL_SPECS = {
                 ["apt-get", "install", "-y", "gh"],
             ]),
             ("dnf", ["sudo", "dnf", "install", "-y", "gh"]),
+        ],
+        "node": [
+            ("apt-get", [
+                ["sudo", "apt-get", "update"],
+                ["sudo", "apt-get", "install", "-y", "nodejs", "npm"],
+            ]),
+            ("apt-get", [
+                ["apt-get", "update"],
+                ["apt-get", "install", "-y", "nodejs", "npm"],
+            ]),
+            ("dnf", ["sudo", "dnf", "install", "-y", "nodejs", "npm"]),
+            ("pacman", ["sudo", "pacman", "-S", "--noconfirm", "nodejs", "npm"]),
         ],
     },
 }
@@ -472,33 +490,176 @@ def ensure_dependencies():
 
 
 # ---------------------------------------------------------------------------
+# Claude backend setup
+# ---------------------------------------------------------------------------
+
+def _install_claude_cli() -> bool:
+    """Install the Claude Code CLI via npm."""
+    npm = shutil.which("npm")
+    if not npm:
+        print("  ERROR: npm not found. Cannot install Claude Code CLI.", file=sys.stderr)
+        return False
+    print("  Installing Claude Code CLI via npm (this may take a minute)...")
+    try:
+        r = subprocess.run(
+            [npm, "install", "-g", "@anthropic-ai/claude-code"],
+            timeout=300,
+        )
+        return r.returncode == 0
+    except subprocess.TimeoutExpired:
+        print("  ERROR: npm install timed out.", file=sys.stderr)
+        return False
+    except Exception as e:
+        print(f"  ERROR: npm install failed: {e}", file=sys.stderr)
+        return False
+
+
+def _ensure_python_package(package: str) -> bool:
+    """Install a Python package via pip if not already importable."""
+    import_name = package.replace("-", "_")
+    try:
+        import importlib
+        importlib.import_module(import_name)
+        return True  # already installed
+    except ImportError:
+        pass
+
+    print(f"  Installing Python package: {package}...")
+    try:
+        r = subprocess.run(
+            [sys.executable, "-m", "pip", "install", package],
+            timeout=120,
+        )
+        return r.returncode == 0
+    except subprocess.TimeoutExpired:
+        print(f"  ERROR: pip install {package} timed out.", file=sys.stderr)
+        return False
+    except Exception as e:
+        print(f"  ERROR: pip install {package} failed: {e}", file=sys.stderr)
+        return False
+
+
+def _check_anthropic_api_key():
+    """Ensure ANTHROPIC_API_KEY is set; load from config file if available."""
+    # Already set in environment — nothing to do
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        print("  ANTHROPIC_API_KEY found in environment.")
+        return
+
+    # Try loading from CoderAgentConfig.yaml if it has the key
+    if CONFIG_FILE.exists():
+        cfg = _parse_simple_yaml(CONFIG_FILE.read_text(encoding="utf-8"))
+        key = cfg.get("anthropic_api_key", "")
+        if key and key != _PLACEHOLDER and not key.startswith("sk-ant-XXXX"):
+            os.environ["ANTHROPIC_API_KEY"] = key
+            print("  ANTHROPIC_API_KEY loaded from CoderAgentConfig.yaml.")
+            return
+
+    print()
+    print("=" * 60)
+    print("  WARNING: ANTHROPIC_API_KEY is not set")
+    print("=" * 60)
+    print()
+    print("  The Claude backend requires an Anthropic API key.")
+    print()
+    print("  Option 1 — Environment variable (recommended):")
+    if platform.system() == "Windows":
+        print("      $env:ANTHROPIC_API_KEY = 'sk-ant-...'")
+    else:
+        print("      export ANTHROPIC_API_KEY=sk-ant-...")
+    print()
+    print("  Option 2 — CoderAgentConfig.yaml:")
+    print("      anthropic_api_key: sk-ant-...")
+    print()
+    print("  Get a key at: https://console.anthropic.com/")
+    print("=" * 60)
+    print()
+    # Warn but don't exit — the user might set it via another mechanism
+    # (e.g., claude CLI keychain, system-level env var not yet visible)
+
+
+def _ensure_claude_ready():
+    """Install Node.js, Claude Code CLI, claude-agent-sdk, and verify API key."""
+    system = platform.system()
+
+    # Step 1: Ensure Node.js / npm is available (required for claude CLI)
+    if not shutil.which("npm"):
+        print("Node.js/npm not found — required for Claude Code CLI.")
+        if not _install_tool("node", "Node.js LTS"):
+            print()
+            print("  Please install Node.js manually from: https://nodejs.org/")
+            sys.exit(1)
+        _refresh_path()
+        if not shutil.which("npm"):
+            print("WARNING: npm still not found after install. "
+                  "You may need to open a new terminal.", file=sys.stderr)
+            sys.exit(1)
+    else:
+        print("Node.js/npm found.")
+
+    # Step 2: Ensure Claude Code CLI is installed
+    if not shutil.which("claude"):
+        print("Claude Code CLI not found — installing...")
+        if not _install_claude_cli():
+            print()
+            print("  Please install Claude Code manually:")
+            print("      npm install -g @anthropic-ai/claude-code")
+            print("  Docs: https://docs.anthropic.com/en/docs/claude-code")
+            sys.exit(1)
+        _refresh_path()
+
+        # On Windows the npm global bin may not be on PATH yet in this process;
+        # try common locations before giving up.
+        if not shutil.which("claude") and system == "Windows":
+            appdata = os.environ.get("APPDATA", "")
+            npm_global = os.path.join(appdata, "npm") if appdata else ""
+            if npm_global and os.path.isdir(npm_global):
+                os.environ["PATH"] = npm_global + os.pathsep + os.environ.get("PATH", "")
+
+        if not shutil.which("claude"):
+            print("WARNING: 'claude' not found on PATH after install. "
+                  "You may need to open a new terminal.", file=sys.stderr)
+            sys.exit(1)
+
+    # Verify claude version
+    try:
+        r = subprocess.run(
+            ["claude", "--version"],
+            capture_output=True, text=True, timeout=15,
+        )
+        version = r.stdout.strip() or r.stderr.strip()
+        print(f"Claude Code CLI: {version or 'installed'}")
+    except Exception:
+        print("Claude Code CLI: installed (version check failed)")
+
+    # Step 3: Ensure claude-agent-sdk Python package is available
+    print("Checking claude-agent-sdk Python package...")
+    if not _ensure_python_package("claude-agent-sdk"):
+        print("WARNING: Could not install claude-agent-sdk. "
+              "Run: pip install claude-agent-sdk", file=sys.stderr)
+        # Non-fatal: agent.py subprocess mode still works without the SDK
+    else:
+        print("  claude-agent-sdk ready.")
+
+    # Step 4: Verify Anthropic API key
+    _check_anthropic_api_key()
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
 def run_setup(backend: str = "claude"):
     """Load config, apply it, and ensure all dependencies are ready.
 
-    When backend='claude', verifies the Claude Code CLI is installed and
-    skips gh authentication.  When backend='copilot', uses the original
-    gh-based setup flow.
+    When backend='claude' (default): installs Node.js, Claude Code CLI, and
+    claude-agent-sdk automatically.  No GitHub token required.
+
+    When backend='copilot': uses the original gh/Copilot setup flow.
     """
     if backend == "claude":
-        # Claude backend: verify the claude CLI is available
-        if not shutil.which("claude"):
-            print()
-            print("=" * 60)
-            print("  ERROR: 'claude' CLI not found on PATH")
-            print("=" * 60)
-            print()
-            print("  The claude backend requires Claude Code to be installed.")
-            print("  Install it with:  npm install -g @anthropic-ai/claude-code")
-            print("  Docs: https://docs.anthropic.com/en/docs/claude-code")
-            print("=" * 60)
-            sys.exit(1)
-        print("Claude Code CLI found.")
-        # Still load config (may contain useful settings) but skip gh auth
-        cfg = load_config()
-        return cfg
+        _ensure_claude_ready()
+        return {}
     else:
         # Legacy copilot backend: full gh setup
         cfg = load_config()
@@ -511,5 +672,9 @@ def run_setup(backend: str = "claude"):
 # Standalone usage
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    run_setup()
+    import argparse as _argparse
+    _p = _argparse.ArgumentParser(description="Verify CoderAgent dependencies")
+    _p.add_argument("--backend", choices=["claude", "copilot"], default="claude")
+    _args = _p.parse_args()
+    run_setup(_args.backend)
     print("\nAll checks passed. CoderAgent is ready to run.")
