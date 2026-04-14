@@ -1,7 +1,29 @@
 # CoderAgent Configuration
 #
 # Copy this file to CoderAgentConfig.yaml and fill in your values.
-# CoderAgentConfig.yaml is git-ignored so your token stays local.
+# CoderAgentConfig.yaml is git-ignored so your credentials stay local.
+
+# ---------------------------------------------------------------------------
+# Claude backend (default)
+# ---------------------------------------------------------------------------
+#
+# The Claude backend uses the Claude Code CLI and Anthropic SDK.
+# Set your Anthropic API key here, or export it as an environment variable:
+#
+#   Windows:  $env:ANTHROPIC_API_KEY = 'sk-ant-...'
+#   Linux:    export ANTHROPIC_API_KEY=sk-ant-...
+#
+# Get a key at: https://console.anthropic.com/
+#
+# The environment variable takes precedence over this file.
+
+anthropic_api_key: sk-ant-XXXXXXXXXXXXXXXXXXXX
+
+# ---------------------------------------------------------------------------
+# Copilot backend (legacy, --backend copilot)
+# ---------------------------------------------------------------------------
+#
+# Only required if you pass --backend copilot.
 #
 # IMPORTANT: Classic PATs (ghp_) are NOT supported by the Copilot CLI.
 # You MUST use a Fine-Grained Personal Access Token (github_pat_).
