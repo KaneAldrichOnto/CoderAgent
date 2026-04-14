@@ -594,6 +594,7 @@ def main():
     print(f"Iter timeout:  {args.iteration_timeout}s")
     print(f"Max iters:     {args.max_iterations or 'unlimited'}")
     print(f"Log file:      {log_path}")
+    print(f"Rollback tag:  (created after setup)")
     print()
 
     log(f"Prompt file: {prompt_path}")
@@ -606,6 +607,20 @@ def main():
     if stale_signal.exists():
         stale_signal.unlink()
         log("Cleared stale .agent_done signal from previous run.")
+
+    # Create a rollback tag so the user can restore to pre-run state via:
+    #   git reset --hard agent-run-<timestamp>
+    _rollback_tag = f"agent-run-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    tag_result = subprocess.run(
+        ["git", "tag", _rollback_tag],
+        cwd=str(work_dir), capture_output=True, text=True, timeout=10,
+    )
+    if tag_result.returncode == 0:
+        print(f"Rollback tag created: {_rollback_tag}")
+        log(f"Rollback tag: {_rollback_tag}")
+    else:
+        # Not a fatal error — repo may have no commits yet, or git not available
+        log(f"Could not create rollback tag: {tag_result.stderr.strip()}")
 
     iteration = 0
     try:
