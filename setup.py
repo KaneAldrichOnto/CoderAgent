@@ -578,22 +578,72 @@ def _check_anthropic_api_key():
     # (e.g., claude CLI keychain, system-level env var not yet visible)
 
 
+def _find_npm_on_windows() -> str:
+    """Search standard Windows Node.js install locations for npm.cmd.
+
+    Returns the directory containing npm.cmd if found, else empty string.
+    winget/chocolatey may install Node but not update the current session's
+    PATH, so a disk search is needed before concluding npm is absent.
+    """
+    prog_files = [
+        os.environ.get("ProgramFiles", r"C:\Program Files"),
+        os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+        os.environ.get("ProgramW6432", r"C:\Program Files"),
+    ]
+    candidates: list[Path] = []
+
+    # Standard installer locations
+    for pf in prog_files:
+        if pf:
+            candidates.append(Path(pf) / "nodejs")
+
+    # nvm-windows: %APPDATA%\nvm\<version>
+    appdata = os.environ.get("APPDATA", "")
+    nvm_root = os.environ.get("NVM_HOME", os.path.join(appdata, "nvm") if appdata else "")
+    if nvm_root and Path(nvm_root).is_dir():
+        for child in sorted(Path(nvm_root).iterdir(), reverse=True):
+            if child.is_dir() and (child / "npm.cmd").exists():
+                return str(child)
+
+    # Chocolatey
+    choco = Path(r"C:\ProgramData\chocolatey\bin")
+    if choco.is_dir():
+        candidates.append(choco)
+
+    for candidate in candidates:
+        if (candidate / "npm.cmd").exists() or (candidate / "npm").exists():
+            return str(candidate)
+
+    return ""
+
+
 def _ensure_claude_ready():
-    """Install Node.js, Claude Code CLI, claude-agent-sdk, and verify API key."""
+    """Install Node.js, Claude Code CLI, and verify API key."""
     system = platform.system()
 
     # Step 1: Ensure Node.js / npm is available (required for claude CLI)
     if not shutil.which("npm"):
-        print("Node.js/npm not found — required for Claude Code CLI.")
-        if not _install_tool("node", "Node.js LTS"):
-            print()
-            print("  Please install Node.js manually from: https://nodejs.org/")
-            sys.exit(1)
-        _refresh_path()
-        if not shutil.which("npm"):
-            print("WARNING: npm still not found after install. "
-                  "You may need to open a new terminal.", file=sys.stderr)
-            sys.exit(1)
+        # On Windows, Node may be installed but not on the current session PATH.
+        # Search known locations before attempting (and potentially failing on)
+        # a fresh winget install — winget returns non-zero when nothing to upgrade.
+        found_dir = _find_npm_on_windows() if system == "Windows" else ""
+        if found_dir:
+            os.environ["PATH"] = found_dir + os.pathsep + os.environ.get("PATH", "")
+            print(f"Node.js/npm found at {found_dir} — added to PATH.")
+        else:
+            print("Node.js/npm not found — required for Claude Code CLI.")
+            _install_tool("node", "Node.js LTS")
+            _refresh_path()
+            # Search again in case the installer put it in a non-standard spot
+            if not shutil.which("npm") and system == "Windows":
+                found_dir = _find_npm_on_windows()
+                if found_dir:
+                    os.environ["PATH"] = found_dir + os.pathsep + os.environ.get("PATH", "")
+            if not shutil.which("npm"):
+                print()
+                print("  npm still not found after install.")
+                print("  Please install Node.js from https://nodejs.org/ then re-run.")
+                sys.exit(1)
     else:
         print("Node.js/npm found.")
 
