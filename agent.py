@@ -574,6 +574,147 @@ def run_copilot(prompt: str, *, copilot_cli: str, model: str,
         return 1
 
 
+def run_claude(prompt: str, *, claude_cli: str, model: str,
+               work_dir: Path, extra_dirs: list[Path],
+               iteration: int,
+               idle_timeout: int = DEFAULT_IDLE_TIMEOUT,
+               iteration_timeout: int = DEFAULT_ITERATION_TIMEOUT) -> int:
+    """Invoke the Claude Code CLI in headless mode with the given prompt.
+
+    Returns the process exit code.
+
+    Claude Code headless flags (discovered via docs):
+      - -p / --print: headless mode, accepts prompt string
+      - --model: model selection
+      - --allowedTools: tool permissions (use Bash,Read,Write,Edit etc.)
+      - --output-format: text|json|stream-json
+      - No --add-dir equivalent; cwd controls working directory
+    """
+    # Write prompt to file (same pattern as run_copilot)
+    prompt_dir = work_dir / "logs"
+    prompt_dir.mkdir(parents=True, exist_ok=True)
+    prompt_file = prompt_dir / f"prompt_iter{iteration}.md"
+    prompt_file.write_text(prompt, encoding="utf-8")
+
+    # Claude Code reads the prompt directly via -p flag
+    full_inline_prompt = (
+        f"Read and follow ALL instructions in the file: {prompt_file}\n"
+        f"That file contains your complete task description for this iteration."
+    )
+
+    cmd = [claude_cli, "--print", "--model", model, "-p", full_inline_prompt,
+           "--output-format", "stream-json"]
+
+    log_section(f"PROMPT (iteration {iteration})", prompt)
+
+    print()
+    print("=" * 60)
+    print(f"  Iteration {iteration}")
+    print("=" * 60)
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(work_dir),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+        )
+
+        output_lines = []
+        iteration_start = time.monotonic()
+        last_output_time = time.monotonic()
+        timed_out = False
+        timeout_reason = ""
+
+        def _read_output():
+            """Read stdout in a background thread to allow timeout checks."""
+            nonlocal last_output_time
+            try:
+                for line in proc.stdout:
+                    output_lines.append(line)
+                    last_output_time = time.monotonic()
+                    print(line, end="")
+                    log(line.rstrip())
+            except ValueError:
+                pass  # stdout closed
+
+        reader = threading.Thread(target=_read_output, daemon=True)
+        reader.start()
+
+        try:
+            while reader.is_alive():
+                reader.join(timeout=5)
+                now = time.monotonic()
+
+                # Check idle timeout
+                if idle_timeout > 0 and (now - last_output_time) > idle_timeout:
+                    timed_out = True
+                    timeout_reason = (
+                        f"No output for {idle_timeout}s (idle timeout)"
+                    )
+                    break
+
+                # Check iteration timeout
+                if iteration_timeout > 0 and (now - iteration_start) > iteration_timeout:
+                    timed_out = True
+                    timeout_reason = (
+                        f"Iteration exceeded {iteration_timeout}s (iteration timeout)"
+                    )
+                    break
+
+        except KeyboardInterrupt:
+            print("\n\nTerminating Claude subprocess...")
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            raise
+
+        if timed_out:
+            msg = f"TIMEOUT: {timeout_reason} — killing iteration {iteration}"
+            print(f"\n{msg}")
+            log(msg)
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            reader.join(timeout=5)
+        else:
+            proc.wait()
+
+        output = "".join(output_lines)
+        log_section(f"OUTPUT (iteration {iteration})", output)
+
+        if timed_out:
+            return 1
+
+        if proc.returncode != 0:
+            msg = f"Claude CLI exited with code {proc.returncode}"
+            print(f"\n{msg}")
+            log(msg)
+
+        return proc.returncode
+
+    except FileNotFoundError:
+        print("ERROR: 'claude' CLI not found. Is it installed and on PATH?",
+              file=sys.stderr)
+        log("ERROR: claude CLI not found")
+        return 1
+    except Exception as e:
+        print(f"ERROR running Claude: {e}", file=sys.stderr)
+        log(f"ERROR: {e}")
+        return 1
+
+
 # ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
@@ -626,11 +767,15 @@ def main():
              "Output is injected into the next iteration's prompt. "
              "Also used to validate the .agent_done signal before stopping.",
     )
+    parser.add_argument(
+        "--backend", choices=["copilot", "claude"], default="claude",
+        help="Which CLI backend to use: 'claude' (default) or 'copilot' (legacy gh copilot)",
+    )
 
     args = parser.parse_args()
 
     # Load config, set env vars, install/verify dependencies
-    run_setup()
+    run_setup(backend=args.backend)
 
     # Resolve dirs
     work_dir = Path(args.dir[0]).resolve() if args.dir else Path.cwd().resolve()
@@ -650,17 +795,20 @@ def main():
         print(full)
         sys.exit(0)
 
-    # Verify gh CLI
-    copilot_cli = shutil.which("gh")
-    if not copilot_cli:
-        print("WARNING: 'gh' not found on PATH; will try anyway.")
-        copilot_cli = "gh"
+    # Resolve CLI backend
+    if args.backend == "claude":
+        agent_cli = shutil.which("claude") or "claude"
+        backend_run = lambda prompt, **kw: run_claude(prompt, claude_cli=agent_cli, **kw)
+    else:
+        agent_cli = shutil.which("gh") or "gh"
+        backend_run = lambda prompt, **kw: run_copilot(prompt, copilot_cli=agent_cli, **kw)
 
     # Init logging
     log_dir = work_dir / "logs"
     log_path = init_log(log_dir)
     init_internal_logs()
 
+    print(f"Backend:       {args.backend}")
     print(f"Prompt:        {prompt_path}")
     print(f"Working dir:   {work_dir}")
     print(f"Extra dirs:    {extra_dirs or '(none)'}")
@@ -735,9 +883,8 @@ def main():
 
             commit_before = git_head(work_dir)
 
-            exit_code = run_copilot(
+            exit_code = backend_run(
                 full_prompt,
-                copilot_cli=copilot_cli,
                 model=args.model,
                 work_dir=work_dir,
                 extra_dirs=extra_dirs,
@@ -749,7 +896,7 @@ def main():
             # Track consecutive failures
             if exit_code != 0:
                 consecutive_failures += 1
-                msg = (f"WARNING: Copilot exited with code {exit_code} "
+                msg = (f"WARNING: Backend exited with code {exit_code} "
                        f"({consecutive_failures} consecutive failure(s)).")
                 print(f"\n>> {msg}")
                 log(msg)

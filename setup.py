@@ -475,12 +475,36 @@ def ensure_dependencies():
 # Public entry point
 # ---------------------------------------------------------------------------
 
-def run_setup():
-    """Load config, apply it, and ensure all dependencies are ready."""
-    cfg = load_config()
-    apply_config(cfg)
-    ensure_dependencies()
-    return cfg
+def run_setup(backend: str = "claude"):
+    """Load config, apply it, and ensure all dependencies are ready.
+
+    When backend='claude', verifies the Claude Code CLI is installed and
+    skips gh authentication.  When backend='copilot', uses the original
+    gh-based setup flow.
+    """
+    if backend == "claude":
+        # Claude backend: verify the claude CLI is available
+        if not shutil.which("claude"):
+            print()
+            print("=" * 60)
+            print("  ERROR: 'claude' CLI not found on PATH")
+            print("=" * 60)
+            print()
+            print("  The claude backend requires Claude Code to be installed.")
+            print("  Install it with:  npm install -g @anthropic-ai/claude-code")
+            print("  Docs: https://docs.anthropic.com/en/docs/claude-code")
+            print("=" * 60)
+            sys.exit(1)
+        print("Claude Code CLI found.")
+        # Still load config (may contain useful settings) but skip gh auth
+        cfg = load_config()
+        return cfg
+    else:
+        # Legacy copilot backend: full gh setup
+        cfg = load_config()
+        apply_config(cfg)
+        ensure_dependencies()
+        return cfg
 
 
 # ---------------------------------------------------------------------------
