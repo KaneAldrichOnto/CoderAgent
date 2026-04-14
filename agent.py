@@ -319,7 +319,7 @@ def check_done_signal(work_dir: Path) -> bool:
 
 def build_full_prompt(user_prompt: str, iteration: int,
                       scratchpad: str, last_commits: str,
-                      steering: str) -> str:
+                      steering: str, test_results: str) -> str:
     """Wrap the user prompt with scratchpad contents and housekeeping."""
     if steering.strip():
         steering_section = (
@@ -343,6 +343,15 @@ def build_full_prompt(user_prompt: str, iteration: int,
             "*(none — either this is the first iteration or no commits were made)*\n"
         )
 
+    if test_results.strip():
+        test_section = (
+            "\n---\n\n"
+            "## Test Results from Last Iteration\n\n"
+            f"{test_results}\n"
+        )
+    else:
+        test_section = ""
+
     scratchpad_section = ""
     if scratchpad.strip():
         scratchpad_section = (
@@ -361,6 +370,7 @@ def build_full_prompt(user_prompt: str, iteration: int,
 
 {user_prompt}
 {commit_history_section}
+{test_section}
 {scratchpad_section}
 ---
 
@@ -390,6 +400,31 @@ def build_full_prompt(user_prompt: str, iteration: int,
 # ---------------------------------------------------------------------------
 # Copilot invocation
 # ---------------------------------------------------------------------------
+
+def run_test_cmd(cmd: str, work_dir: Path) -> tuple[int, str]:
+    """Run the test command and return (exit_code, combined output)."""
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=str(work_dir),
+            shell=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=300,  # 5-minute hard cap for test runs
+        )
+        output = (result.stdout + result.stderr).strip()
+        # Truncate very long output to avoid overwhelming the prompt
+        max_chars = 6000
+        if len(output) > max_chars:
+            output = output[:max_chars] + "\n... (output truncated)"
+        return result.returncode, output
+    except subprocess.TimeoutExpired:
+        return 1, "ERROR: Test command timed out after 300 seconds."
+    except Exception as e:
+        return 1, f"ERROR running test command: {e}"
+
 
 def run_copilot(prompt: str, *, copilot_cli: str, model: str,
                 work_dir: Path, extra_dirs: list[Path],
@@ -585,6 +620,12 @@ def main():
         "--iteration-timeout", type=int, default=DEFAULT_ITERATION_TIMEOUT, metavar="SECONDS",
         help=f"Max seconds per iteration (default: {DEFAULT_ITERATION_TIMEOUT}, 0=disabled)",
     )
+    parser.add_argument(
+        "--test-cmd", default="", metavar="CMD",
+        help="Shell command to run after each iteration (e.g. 'pytest tests/'). "
+             "Output is injected into the next iteration's prompt. "
+             "Also used to validate the .agent_done signal before stopping.",
+    )
 
     args = parser.parse_args()
 
@@ -605,7 +646,7 @@ def main():
     if args.dry_run:
         scratchpad = load_scratchpad(work_dir)
         full = build_full_prompt(user_prompt, iteration=1, scratchpad=scratchpad,
-                                last_commits="", steering="")
+                                last_commits="", steering="", test_results="")
         print(full)
         sys.exit(0)
 
@@ -628,6 +669,7 @@ def main():
     print(f"Idle timeout:  {args.idle_timeout}s")
     print(f"Iter timeout:  {args.iteration_timeout}s")
     print(f"Max iters:     {args.max_iterations or 'unlimited'}")
+    print(f"Test command:  {args.test_cmd or '(none)'}")
     print(f"Log file:      {log_path}")
     print(f"Rollback tag:  (created after setup)")
     print()
@@ -662,6 +704,7 @@ def main():
     consecutive_no_progress = 0
     prev_commit_before = ""
     prev_commit_after = ""
+    last_test_results = ""
     try:
         while True:
             iteration += 1
@@ -684,7 +727,7 @@ def main():
                 last_commits = ""
 
             full_prompt = build_full_prompt(user_prompt, iteration, scratchpad,
-                                           last_commits, steering)
+                                           last_commits, steering, last_test_results)
 
             if steering:
                 print(f">> Steering override active ({len(steering)} chars from steering.md)")
@@ -753,10 +796,48 @@ def main():
 
             # Check for early-exit signal
             if check_done_signal(work_dir):
-                msg = "Agent signalled TASK COMPLETE — stopping."
-                print(f"\n>> {msg}")
-                log(msg)
-                break
+                if args.test_cmd:
+                    print("\n>> Agent signalled DONE — validating with test command...")
+                    log("Validating done signal with test command.")
+                    val_exit_code, val_output = run_test_cmd(args.test_cmd, work_dir)
+                    if val_exit_code == 0:
+                        msg = "Agent signalled TASK COMPLETE and tests PASSED — stopping."
+                        print(f"\n>> {msg}")
+                        log(msg)
+                        break
+                    else:
+                        msg = ("Agent signalled done but tests FAILED — "
+                               "continuing with failure output injected.")
+                        print(f"\n>> {msg}")
+                        log(msg)
+                        last_test_results = (
+                            f"[DONE SIGNAL REJECTED — tests failed]\n"
+                            f"Command: `{args.test_cmd}`\n"
+                            f"Exit code: {val_exit_code}\n\n"
+                            f"```\n{val_output}\n```"
+                        )
+                        # Do NOT break — fall through to the delay and next iteration
+                else:
+                    msg = "Agent signalled TASK COMPLETE — stopping."
+                    print(f"\n>> {msg}")
+                    log(msg)
+                    break
+
+            # Run test command (if configured) to get feedback for next iteration
+            if args.test_cmd:
+                print(f"\n>> Running test command: {args.test_cmd}")
+                log(f"Running test command: {args.test_cmd}")
+                test_exit_code, test_output = run_test_cmd(args.test_cmd, work_dir)
+                last_test_results = (
+                    f"Command: `{args.test_cmd}`\n"
+                    f"Exit code: {test_exit_code}\n\n"
+                    f"```\n{test_output}\n```"
+                )
+                status = "PASSED" if test_exit_code == 0 else "FAILED"
+                print(f">> Tests {status} (exit code {test_exit_code})")
+                log(f"Test results ({status}):\n{test_output}")
+            else:
+                last_test_results = ""
 
             # Delay before next iteration
             is_last = args.max_iterations and iteration >= args.max_iterations
