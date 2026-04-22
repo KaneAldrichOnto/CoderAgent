@@ -438,11 +438,19 @@ def run_test_cmd(cmd: str, work_dir: Path) -> tuple[int, str]:
 def run_copilot(prompt: str, *, copilot_cli: str, model: str,
                 work_dir: Path, extra_dirs: list[Path],
                 iteration: int,
+                cli_kind: str = "gh-copilot",
                 idle_timeout: int = DEFAULT_IDLE_TIMEOUT,
                 iteration_timeout: int = DEFAULT_ITERATION_TIMEOUT) -> int:
     """Invoke the Copilot CLI with the given prompt.
 
     Returns the process exit code.
+
+    cli_kind selects the invocation style:
+      - "gh-copilot" (default): legacy ``gh copilot -- ...`` extension.
+      - "copilot": the newer standalone ``@github/copilot`` npm CLI,
+        invoked as ``copilot ...`` directly. This CLI supports
+        in-turn multimodal vision (the model can open image files
+        on disk mid-turn without an MCP shim).
 
     Protections against hanging:
       - stdin is /dev/null so the agent can never block on user input
@@ -460,15 +468,28 @@ def run_copilot(prompt: str, *, copilot_cli: str, model: str,
         f"That file contains your complete task description."
     )
 
-    cmd = [
-        copilot_cli, "copilot",
-        "--",
-        "--model", model,
-        "--allow-all-tools",
-        "--allow-all-paths",
-        "-p", short_prompt,
-        "--add-dir", str(work_dir),
-    ]
+    if cli_kind == "copilot":
+        # Newer standalone @github/copilot CLI -- enables in-turn vision.
+        cmd = [
+            copilot_cli,
+            "--prompt", short_prompt,
+            "--model", model,
+            "--allow-all-tools",
+            "--allow-all-paths",
+            "--no-ask-user",
+            "--add-dir", str(work_dir),
+        ]
+    else:
+        # Legacy: `gh copilot -- ...`
+        cmd = [
+            copilot_cli, "copilot",
+            "--",
+            "--model", model,
+            "--allow-all-tools",
+            "--allow-all-paths",
+            "-p", short_prompt,
+            "--add-dir", str(work_dir),
+        ]
     for d in extra_dirs:
         if d.exists():
             cmd.extend(["--add-dir", str(d)])
@@ -573,9 +594,15 @@ def run_copilot(prompt: str, *, copilot_cli: str, model: str,
         return proc.returncode
 
     except FileNotFoundError:
-        print("ERROR: 'gh' CLI not found. Is it installed and on PATH?",
-              file=sys.stderr)
-        log("ERROR: gh CLI not found")
+        cli_name = "copilot" if cli_kind == "copilot" else "gh"
+        install_hint = (
+            "Run 'npm install -g @github/copilot' to install the new CLI."
+            if cli_kind == "copilot"
+            else "Install the GitHub CLI from https://cli.github.com/."
+        )
+        print(f"ERROR: '{cli_name}' CLI not found. Is it installed and on PATH? "
+              f"{install_hint}", file=sys.stderr)
+        log(f"ERROR: {cli_name} CLI not found")
         return 1
     except Exception as e:
         print(f"ERROR running Copilot: {e}", file=sys.stderr)
@@ -780,6 +807,13 @@ def main():
         "--backend", choices=["copilot", "claude"], default="copilot",
         help="Which CLI backend to use: 'claude' (default) or 'copilot' (legacy gh copilot)",
     )
+    parser.add_argument(
+        "--cli", choices=["copilot", "gh-copilot", "auto"], default="auto",
+        help="When --backend=copilot, which CLI to invoke: "
+             "'copilot' (newer standalone @github/copilot npm CLI, supports "
+             "in-turn vision), 'gh-copilot' (legacy gh copilot extension), "
+             "or 'auto' (prefer 'copilot' if on PATH, else 'gh').",
+    )
 
     args = parser.parse_args()
 
@@ -809,8 +843,17 @@ def main():
         agent_cli = shutil.which("claude") or "claude"
         backend_run = lambda prompt, **kw: run_claude(prompt, claude_cli=agent_cli, **kw)
     else:
-        agent_cli = shutil.which("gh") or "gh"
-        backend_run = lambda prompt, **kw: run_copilot(prompt, copilot_cli=agent_cli, **kw)
+        # Determine which Copilot CLI to invoke
+        cli_kind = args.cli
+        if cli_kind == "auto":
+            cli_kind = "copilot" if shutil.which("copilot") else "gh-copilot"
+        if cli_kind == "copilot":
+            agent_cli = shutil.which("copilot") or "copilot"
+        else:
+            agent_cli = shutil.which("gh") or "gh"
+        backend_run = lambda prompt, **kw: run_copilot(
+            prompt, copilot_cli=agent_cli, cli_kind=cli_kind, **kw
+        )
 
     # Init logging
     log_dir = work_dir / "logs"
