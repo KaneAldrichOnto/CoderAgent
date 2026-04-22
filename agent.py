@@ -33,10 +33,10 @@ from setup import run_setup
 # ---------------------------------------------------------------------------
 # Defaults
 # ---------------------------------------------------------------------------
-DEFAULT_MODEL = "claude-opus-4.6"
+DEFAULT_MODEL = "claude-opus-4.7"
 DEFAULT_DELAY = 30  # seconds between iterations
-DEFAULT_IDLE_TIMEOUT = 300  # kill if no output for 5 minutes
-DEFAULT_ITERATION_TIMEOUT = 3600  # kill after 60 minutes total per iteration
+DEFAULT_IDLE_TIMEOUT = 0  # kill if no output for 5 minutes
+DEFAULT_ITERATION_TIMEOUT = 0  # kill after 60 minutes total per iteration
 DONE_SIGNAL_FILE = ".agent_done"  # agent creates this file to end early
 
 # Force UTF-8 on Windows
@@ -768,7 +768,7 @@ def main():
              "Also used to validate the .agent_done signal before stopping.",
     )
     parser.add_argument(
-        "--backend", choices=["copilot", "claude"], default="claude",
+        "--backend", choices=["copilot", "claude"], default="copilot",
         help="Which CLI backend to use: 'claude' (default) or 'copilot' (legacy gh copilot)",
     )
 
