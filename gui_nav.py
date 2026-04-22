@@ -1773,10 +1773,14 @@ def _ensure_server():
     script = str(Path(__file__).resolve())
     log_path = str(_CLIENT_LOG)
     log_fh = open(log_path, "a")
-    args = [sys.executable, script, "serve",
+    # Global flags (--process / --port / --log) must precede the subcommand
+    # positional ('serve'), otherwise argparse routes them to the subparser
+    # which doesn't accept them.
+    args = [sys.executable, script,
             "--process", target,
             "--port", str(_CLIENT_PORT),
-            "--log", log_path]
+            "--log", log_path,
+            "serve"]
     if sys.platform == "win32":
         CREATE_NO_WINDOW = 0x08000000
         subprocess.Popen(args, creationflags=CREATE_NO_WINDOW,
