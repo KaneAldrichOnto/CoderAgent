@@ -127,11 +127,16 @@ python agent.py --prompt <FILE> [options]
 |---|---|---|
 | `--prompt FILE` | *(required)* | Markdown file with your task description. |
 | `--dir PATH` | current dir | Directory to expose to the agent. First `--dir` is the working directory. Repeatable. |
-| `--model NAME` | `claude-opus-4.6` | Copilot model. |
+| `--model NAME` | `claude-opus-4.7` | Model name passed to the underlying CLI. |
 | `--delay SECONDS` | `30` | Pause between iterations. |
 | `--max-iterations N` | `0` (unlimited) | Stop after N iterations. |
 | `--once` | — | Shorthand for `--max-iterations 1`. |
 | `--dry-run` | — | Print the full prompt and exit. |
+| `--idle-timeout SECONDS` | `300` | Kill the iteration if the CLI produces no output for this many seconds. `0` to disable. |
+| `--iteration-timeout SECONDS` | `3600` | Kill the iteration after this many total seconds. `0` to disable. |
+| `--test-cmd CMD` | — | Shell command to run after each iteration (e.g. `pytest tests/`). Output is injected into the next iteration's prompt and used to validate the `.agent_done` signal. |
+| `--backend {copilot,claude}` | `copilot` | Which agent CLI to drive. |
+| `--cli {copilot,gh-copilot,auto}` | `auto` | When `--backend=copilot`, pick the new standalone `copilot` CLI (supports in-turn vision) or the legacy `gh copilot` extension. `auto` prefers `copilot` if on PATH. |
 
 ### Examples
 
@@ -187,7 +192,67 @@ The prompt is plain Markdown — include code blocks, links, file paths, or anyt
 - **Windows:** `winget` (ships with Windows 10/11) — used to auto-install `git` and `gh` if missing
 - **Linux:** `apt-get`, `dnf`, or `pacman` — used to auto-install `git` and `gh` if missing
 
-Everything else (`git`, `gh` CLI, Copilot CLI binary) is installed automatically by `setup.py` on first run.
+The core loop installs everything else (`git`, `gh` CLI, Copilot CLI binary)
+automatically via `setup.py` on first run.
+
+### Optional dependencies (only if you use the matching feature)
+
+| Dependency | Install | Used by |
+|---|---|---|
+| `@github/copilot` npm CLI | `npm install -g @github/copilot` *(or `python setup.py --backend copilot --install-copilot-cli`)* | `agent.py --cli copilot` — enables in-turn multimodal vision |
+| `pywinauto` | `pip install pywinauto` *(or `python setup.py --with-gui`)* | `gui_nav.py` GUI automation server (Windows only) |
+| `pillow` | `pip install pillow` *(or `python setup.py --with-gui`)* | `doc_tools.py` image crop / annotate / arrow / label |
+| `mermaid-cli` (`mmdc`) | `npm install -g @mermaid-js/mermaid-cli` | `doc_tools.py render-diagram` (Mermaid → PNG) |
+
+## Optional features
+
+All optional, all opt-in. The core loop works without any of them.
+
+| Feature | What it does | How to use |
+|---|---|---|
+| **Scratchpad round-trip** | The loop reads `agent_scratchpad.md` from the working directory at the start of each iteration and embeds it into the prompt under a clearly-labeled section. The model is asked to overwrite the file before stopping. Git-ignored. | Just run the loop — it's on by default. The model decides when to write the file. |
+| **`.agent_done` sentinel** | The model creates an empty `.agent_done` file in the working directory when its task is complete; the loop deletes it and exits. | On by default. Combine with `--test-cmd` to require a passing test before honoring the signal. |
+| **Internal commit logs** | Per-commit text files in `InternalLogs/` (timestamped, sha-stamped) plus a rolling human-readable `commit_log.md` (subject, body, files changed, diff stat, truncated patch). | On by default. Both paths are git-ignored. |
+| **Idle / iteration timeouts** | Kill the CLI subprocess if it produces no output for `--idle-timeout` seconds (default 300) or runs longer than `--iteration-timeout` seconds (default 3600). | Tune via flags. Pass `0` to disable either. |
+| **In-turn vision** | The new `copilot` CLI is multimodal: the model can open image files directly mid-turn (no MCP shim, no `@`-attach). Captures and annotations from `doc_tools.py` are immediately readable. | `python agent.py --backend copilot --cli copilot ...` |
+| **GUI automation (`gui_nav.py`)** | Persistent TCP UIA server holding a `pywinauto` connection alive between calls. Sub-second `find` / `click` / `screenshot` from the loop. Windows-only. | `python gui_nav.py serve --process MyApp.exe`, then call `python gui_nav.py click "OK"` etc. from your prompt. |
+| **Doc toolkit (`doc_tools.py`)** | App-agnostic image crop / annotate-rect / annotate-arrow / annotate-label / Mermaid → PNG, plus thin wrappers around `gui_nav.py screenshot` and a `capture` (click + screenshot + save) shortcut. | `python doc_tools.py --help` for the full list. |
+
+## App overlays (downstream wrappers)
+
+CoderAgent is meant to be **wrapped, not forked**. A downstream project
+that needs GUI automation, screenshot pipelines, or domain-specific
+document readers ships its own toolkit script and its own rolling
+`agent_context.md` alongside it, and references both from its own
+`prompt.md`. The toolkit script calls into `gui_nav.py` and
+`doc_tools.py` for the heavy lifting; only the app-specific bits
+(target process name, document layout, alias map) live downstream.
+
+A typical overlay layout:
+
+```
+my-app-docs/
+├── agent/
+│   ├── prompt.md                  # references ../agent_context.md
+│   ├── agent_context.md           # rolling app-specific context
+│   ├── my_app_agent.py            # subcommand toolkit (HTML/PPTX/etc.)
+│   └── MyAppConfig.yaml           # target_process: MyApp.exe
+└── coder-agent/                   # this repo, vendored or submodule
+    ├── agent.py
+    ├── gui_nav.py
+    └── doc_tools.py
+```
+
+Run from the overlay:
+
+```bash
+python ../coder-agent/agent.py \
+  --prompt prompt.md \
+  --dir . --dir ../coder-agent \
+  --backend copilot --cli copilot
+```
+
+Nothing in this repo references your overlay — that's the point.
 
 ## Troubleshooting
 
