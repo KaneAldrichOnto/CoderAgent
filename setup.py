@@ -699,6 +699,32 @@ def _ensure_claude_ready():
 # Optional npm CLI: @github/copilot
 # ---------------------------------------------------------------------------
 
+def _ensure_node_installed() -> bool:
+    """Ensure Node.js + npm are on PATH, installing if needed.
+
+    Used by the optional npm-based deps (mermaid-cli, @github/copilot CLI)
+    when the copilot backend is in use -- the claude backend already
+    bootstraps Node via _ensure_claude_ready().
+    """
+    if shutil.which("npm"):
+        return True
+    system = platform.system()
+    if system == "Windows":
+        found_dir = _find_npm_on_windows()
+        if found_dir:
+            os.environ["PATH"] = found_dir + os.pathsep + os.environ.get("PATH", "")
+            return shutil.which("npm") is not None
+    print("  Node.js/npm not found -- installing for optional npm-based deps...")
+    if not _install_tool("node", "Node.js LTS"):
+        return False
+    _refresh_path()
+    if not shutil.which("npm") and system == "Windows":
+        found_dir = _find_npm_on_windows()
+        if found_dir:
+            os.environ["PATH"] = found_dir + os.pathsep + os.environ.get("PATH", "")
+    return shutil.which("npm") is not None
+
+
 def _install_npm_global(package: str) -> bool:
     """Install a package globally via npm. Returns True on success."""
     npm = shutil.which("npm")
@@ -737,9 +763,9 @@ def _ensure_copilot_npm_cli():
             print("  @github/copilot CLI: installed")
         return True
 
-    if not shutil.which("npm"):
-        print("  @github/copilot CLI not present; npm not found either. "
-              "Falling back to legacy 'gh copilot'.")
+    if not _ensure_node_installed():
+        print("  @github/copilot CLI not present; npm could not be "
+              "installed. Falling back to legacy 'gh copilot'.")
         return False
 
     print("  @github/copilot CLI not found -- installing...")
@@ -815,6 +841,36 @@ def install_gui_dependencies() -> bool:
     return False
 
 
+def install_mermaid_cli() -> bool:
+    """Ensure the Mermaid CLI (mmdc) is installed for doc_tools render-diagram.
+
+    Cross-platform: installs via npm when available. No-op (with notice)
+    when npm is missing.
+    """
+    # Detect any of mmdc, mmdc.cmd (Windows shim), mmdc.ps1
+    for name in ("mmdc", "mmdc.cmd", "mmdc.ps1"):
+        if shutil.which(name):
+            print("  Mermaid CLI (mmdc): already installed")
+            return True
+
+    if not _ensure_node_installed():
+        print("  Mermaid CLI (mmdc) not installed and npm could not be "
+              "installed. Skipping. Run "
+              "'npm install -g @mermaid-js/mermaid-cli' manually to enable "
+              "doc_tools.py render-diagram.")
+        return False
+
+    print("  Installing @mermaid-js/mermaid-cli via npm "
+          "(this may take a minute)...")
+    if not _install_npm_global("@mermaid-js/mermaid-cli"):
+        print("  WARNING: could not install @mermaid-js/mermaid-cli. "
+              "doc_tools.py render-diagram will be unavailable until you "
+              "install it manually.", file=sys.stderr)
+        return False
+    _refresh_path()
+    return any(shutil.which(n) for n in ("mmdc", "mmdc.cmd", "mmdc.ps1"))
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -848,6 +904,7 @@ def run_setup(backend: str = "claude", *, with_gui: bool = False,
 
     if with_gui:
         install_gui_dependencies()
+        install_mermaid_cli()
 
     return cfg
 

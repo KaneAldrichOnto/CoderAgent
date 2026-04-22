@@ -814,11 +814,32 @@ def main():
              "in-turn vision), 'gh-copilot' (legacy gh copilot extension), "
              "or 'auto' (prefer 'copilot' if on PATH, else 'gh').",
     )
+    parser.add_argument(
+        "--no-gui-deps", action="store_true",
+        help="Skip auto-install of optional GUI deps (pywinauto on Windows, "
+             "pillow everywhere). Default is to install them so gui_nav.py "
+             "and doc_tools.py work out of the box.",
+    )
+    parser.add_argument(
+        "--no-copilot-npm-cli", action="store_true",
+        help="When --backend=copilot, skip auto-install of the new "
+             "@github/copilot npm CLI (which enables in-turn vision via "
+             "--cli copilot). Default is to install it.",
+    )
 
     args = parser.parse_args()
 
-    # Load config, set env vars, install/verify dependencies
-    run_setup(backend=args.backend)
+    # Load config, set env vars, install/verify dependencies.
+    # By default we also install the optional GUI feature deps (pywinauto +
+    # pillow) and the new @github/copilot npm CLI so the agent can drive
+    # GUIs, capture/annotate screenshots, render Mermaid diagrams, and use
+    # in-turn vision without any manual setup. Pass --no-gui-deps or
+    # --no-copilot-npm-cli to opt out.
+    run_setup(
+        backend=args.backend,
+        with_gui=not args.no_gui_deps,
+        install_copilot_cli=not args.no_copilot_npm_cli,
+    )
 
     # Resolve dirs
     work_dir = Path(args.dir[0]).resolve() if args.dir else Path.cwd().resolve()
