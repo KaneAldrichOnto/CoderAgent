@@ -35,8 +35,8 @@ from setup import run_setup
 # ---------------------------------------------------------------------------
 DEFAULT_MODEL = "claude-opus-4.7"
 DEFAULT_DELAY = 30  # seconds between iterations
-DEFAULT_IDLE_TIMEOUT = 0  # kill if no output for 5 minutes
-DEFAULT_ITERATION_TIMEOUT = 0  # kill after 60 minutes total per iteration
+DEFAULT_IDLE_TIMEOUT = 300  # kill if no output for 5 minutes (0 to disable)
+DEFAULT_ITERATION_TIMEOUT = 3600  # kill after 60 minutes total (0 to disable)
 DONE_SIGNAL_FILE = ".agent_done"  # agent creates this file to end early
 
 # Force UTF-8 on Windows
@@ -376,23 +376,32 @@ def build_full_prompt(user_prompt: str, iteration: int,
 
 ## Housekeeping (always follow these)
 
-1. **Commit regularly.** After every meaningful change, stage and commit with a
-   clear message describing what you did.  Small, frequent commits are better
-   than one large commit at the end.
-2. **Log your progress.** Before starting work, briefly state your plan.  After
-   completing a step, summarize what was done and what remains.
-3. **Stay on task.** Focus only on the instructions above.  Do not refactor
-   unrelated code or add features that were not requested.
-4. **Stop when done.** When the task is fully complete and there is nothing left
-   to do, create an empty file called `.agent_done` in the working directory
-   (e.g. run `touch .agent_done` or write an empty file).  This signals the
-   outer loop to stop iterating.  You should still commit your work first.
-5. **Update the scratchpad.** Before stopping, write notes to
-   `agent_scratchpad.md` in the working directory.  Include:
-   - What you accomplished this iteration
-   - What still needs to be done
-   - Any problems, blockers, or decisions for the next iteration
-   - Key file paths or context the next iteration will need
+1. **Plan, then act.** Before editing, briefly state your plan: which files
+   you will touch, in what order, and how you will verify the change.
+   Re-derive state from the scratchpad and last-iteration commits above
+   instead of starting from scratch.
+2. **Commit regularly.** After every meaningful change, stage and commit
+   with a clear, conventional message (e.g. `feat(scope): summary`).
+   Small, frequent commits beat one giant commit at the end.
+3. **Stay on task.** Focus only on the instructions above. Do not refactor
+   unrelated code or add features that were not requested. Park ideas for
+   later in the scratchpad under "Future work".
+4. **Verify screenshots / generated images with vision in the same turn.**
+   The Copilot CLI is multimodal: when you create or need to confirm a
+   screenshot, **open the image file directly** (give the path as part
+   of your turn). The pixels come back to you in *this* turn — no new
+   iteration, no MCP shim, no @-attach. Paths may be absolute or
+   relative to the working directory.
+5. **Stop when done.** When the task is fully complete, create an empty
+   file called `.agent_done` in the working directory (e.g. `touch
+   .agent_done`). The outer loop will detect it and exit. Commit your
+   work first.
+6. **Update the scratchpad.** Before stopping, overwrite
+   `agent_scratchpad.md` in the working directory with:
+   - "Done this iteration:" — bullet list of commits you made.
+   - "Next:" — top 1-3 todos in order, specific (file + function).
+   - "Open questions / blockers:" — if any.
+   - "Future work:" — anything you noticed but deferred.
    Do NOT commit this file — it is git-ignored.
 """
 
