@@ -696,26 +696,160 @@ def _ensure_claude_ready():
 
 
 # ---------------------------------------------------------------------------
+# Optional npm CLI: @github/copilot
+# ---------------------------------------------------------------------------
+
+def _install_npm_global(package: str) -> bool:
+    """Install a package globally via npm. Returns True on success."""
+    npm = shutil.which("npm")
+    if not npm:
+        print(f"  ERROR: npm not found. Cannot install {package}.",
+              file=sys.stderr)
+        return False
+    print(f"  Installing {package} via npm (this may take a minute)...")
+    try:
+        r = subprocess.run([npm, "install", "-g", package], timeout=300)
+        return r.returncode == 0
+    except subprocess.TimeoutExpired:
+        print(f"  ERROR: npm install {package} timed out.", file=sys.stderr)
+        return False
+    except Exception as e:
+        print(f"  ERROR: npm install {package} failed: {e}", file=sys.stderr)
+        return False
+
+
+def _ensure_copilot_npm_cli():
+    """Detect the new ``@github/copilot`` npm CLI, optionally installing it.
+
+    The standalone ``copilot`` CLI (``npm i -g @github/copilot``) is what
+    enables in-turn multimodal vision. If it is not on PATH, attempt a
+    one-shot install via npm so the next loop iteration can pick it up.
+    Falls back silently if npm is missing -- agent.py will still work via
+    ``--cli gh-copilot``.
+    """
+    if shutil.which("copilot"):
+        try:
+            r = subprocess.run(["copilot", "--version"],
+                               capture_output=True, text=True, timeout=15)
+            ver = (r.stdout or r.stderr).strip()
+            print(f"  @github/copilot CLI: {ver or 'installed'}")
+        except Exception:
+            print("  @github/copilot CLI: installed")
+        return True
+
+    if not shutil.which("npm"):
+        print("  @github/copilot CLI not present; npm not found either. "
+              "Falling back to legacy 'gh copilot'.")
+        return False
+
+    print("  @github/copilot CLI not found -- installing...")
+    if not _install_npm_global("@github/copilot"):
+        print("  WARNING: could not install @github/copilot. "
+              "agent.py will fall back to 'gh copilot' if available.",
+              file=sys.stderr)
+        return False
+    _refresh_path()
+    return shutil.which("copilot") is not None
+
+
+# ---------------------------------------------------------------------------
+# Optional GUI feature deps (pywinauto + pillow), opt in via --with-gui
+# ---------------------------------------------------------------------------
+GUI_PYTHON_PACKAGES = [
+    # (pip_name, import_name)
+    ("pywinauto", "pywinauto"),
+    ("pillow", "PIL"),
+]
+
+
+def install_gui_dependencies() -> bool:
+    """Install pywinauto + pillow on Windows. No-op (with notice) elsewhere.
+
+    Returns True on success (or when nothing needed installing).
+    """
+    if platform.system() != "Windows":
+        print()
+        print("  GUI features (gui_nav.py / doc_tools screenshot) are "
+              "Windows-only.")
+        print("  Skipping pywinauto install on this platform.")
+        # Still try to install Pillow for the image-edit subcommands.
+        try:
+            __import__("PIL")
+            print("  pillow: already installed")
+        except ImportError:
+            print("  Installing pillow for image-edit subcommands...")
+            try:
+                subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "--quiet",
+                     "pillow"], check=True, timeout=180,
+                )
+            except Exception as e:
+                print(f"  WARNING: pip install pillow failed: {e}",
+                      file=sys.stderr)
+        return False
+
+    missing = []
+    for pip_name, import_name in GUI_PYTHON_PACKAGES:
+        try:
+            __import__(import_name)
+        except ImportError:
+            missing.append(pip_name)
+    if not missing:
+        print("  GUI Python packages: all present (pywinauto, pillow)")
+        return True
+
+    print(f"  Installing GUI packages: {', '.join(missing)}")
+    for args in (
+        [sys.executable, "-m", "pip", "install", "--quiet", *missing],
+        [sys.executable, "-m", "pip", "install", "--quiet", "--user",
+         *missing],
+    ):
+        try:
+            r = subprocess.run(args, timeout=300)
+            if r.returncode == 0:
+                print("  GUI packages installed.")
+                return True
+        except Exception:
+            continue
+    print(f"  ERROR: could not install: {missing}", file=sys.stderr)
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
-def run_setup(backend: str = "claude"):
+def run_setup(backend: str = "claude", *, with_gui: bool = False,
+              install_copilot_cli: bool = False):
     """Load config, apply it, and ensure all dependencies are ready.
 
     When backend='claude' (default): installs Node.js, Claude Code CLI, and
     claude-agent-sdk automatically.  No GitHub token required.
 
     When backend='copilot': uses the original gh/Copilot setup flow.
+
+    When install_copilot_cli=True (and backend='copilot'): also detect /
+    install the new standalone ``@github/copilot`` npm CLI, which enables
+    in-turn vision via ``agent.py --cli copilot``.
+
+    When with_gui=True: install the optional GUI automation deps
+    (pywinauto + pillow on Windows; pillow only elsewhere).
     """
     if backend == "claude":
         _ensure_claude_ready()
-        return {}
+        cfg = {}
     else:
         # Legacy copilot backend: full gh setup
         cfg = load_config()
         apply_config(cfg)
         ensure_dependencies()
-        return cfg
+        if install_copilot_cli:
+            _ensure_copilot_npm_cli()
+
+    if with_gui:
+        install_gui_dependencies()
+
+    return cfg
 
 
 # ---------------------------------------------------------------------------
@@ -724,7 +858,17 @@ def run_setup(backend: str = "claude"):
 if __name__ == "__main__":
     import argparse as _argparse
     _p = _argparse.ArgumentParser(description="Verify CoderAgent dependencies")
-    _p.add_argument("--backend", choices=["claude", "copilot"], default="claude")
+    _p.add_argument("--backend", choices=["claude", "copilot"],
+                    default="claude")
+    _p.add_argument("--with-gui", action="store_true",
+                    help="Also install pywinauto + pillow for the optional "
+                         "gui_nav.py / doc_tools image features (Windows "
+                         "only for pywinauto; pillow installed everywhere).")
+    _p.add_argument("--install-copilot-cli", action="store_true",
+                    help="With --backend=copilot, also install the new "
+                         "@github/copilot npm CLI (enables in-turn vision).")
     _args = _p.parse_args()
-    run_setup(_args.backend)
+    run_setup(_args.backend,
+              with_gui=_args.with_gui,
+              install_copilot_cli=_args.install_copilot_cli)
     print("\nAll checks passed. CoderAgent is ready to run.")
