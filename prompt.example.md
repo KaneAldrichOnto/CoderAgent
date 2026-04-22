@@ -48,3 +48,31 @@
 
 - Commit after every meaningful change with a descriptive message.
 - Do not refactor code that is unrelated to the task.
+
+## Optional capabilities (opt in only if you actually need them)
+
+The agent loop ships with several optional features. They are off by
+default — only mention them in *Steps* / *Rules* if your task actually
+needs them.
+
+- **Scratchpad round-trip** — the loop writes `agent_scratchpad.md` from
+  the previous iteration into the next iteration's prompt. Use it to
+  carry forward "Done", "Next", and "Open questions" between turns.
+- **`.agent_done` sentinel** — when your task is fully complete, create
+  an empty `.agent_done` file in the working directory; the loop will
+  exit cleanly.
+- **Internal commit logs** — every commit is logged to `InternalLogs/`
+  and appended to a human-readable `commit_log.md`. Both are git-ignored.
+- **In-turn vision** — when invoked with the new `copilot` CLI, the
+  model can open image files (PNGs, screenshots) directly in the same
+  turn. No MCP shim required. Just reference the path.
+- **`gui_nav.py` GUI automation** — drive arbitrary Windows GUI apps via
+  a persistent UIA server. Configure the target process via `--process`
+  or `target_process:` in `CoderAgentConfig.yaml`. Run
+  `python gui_nav.py --help` for the command reference.
+- **`doc_tools.py` doc toolkit** — wrap `gui_nav screenshot`, crop /
+  annotate / arrow / label images, and render Mermaid diagrams to PNG.
+  Run `python doc_tools.py --help` for the command reference.
+
+If your task does not touch GUIs or screenshots, ignore everything in
+this section.

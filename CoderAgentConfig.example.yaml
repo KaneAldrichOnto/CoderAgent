@@ -35,3 +35,39 @@ anthropic_api_key: sk-ant-XXXXXXXXXXXXXXXXXXXX
 #   Account permissions → GitHub Copilot → Read-only
 
 github_token: XXXXXXXXXXXXXXXXXX
+
+# ---------------------------------------------------------------------------
+# Optional: Copilot CLI selection
+# ---------------------------------------------------------------------------
+#
+# Which Copilot CLI to invoke when --backend=copilot. Only consulted as a
+# fallback when --cli is not passed on the command line.
+#
+#   copilot      = newer standalone @github/copilot npm CLI (supports
+#                  in-turn multimodal vision — recommended)
+#   gh-copilot   = legacy `gh copilot` extension
+#
+# copilot_cli: copilot
+
+# ---------------------------------------------------------------------------
+# Optional: GUI automation (gui_nav.py)
+# ---------------------------------------------------------------------------
+#
+# These knobs are only used by the optional gui_nav.py automation server.
+# Leave commented out to keep the simple "clone and run" defaults.
+#
+# target_process: name of the .exe (without path) that gui_nav.py should
+# attach to. There is intentionally no default — the server will refuse to
+# start without one. Pass --process on the command line to override.
+#
+# target_process: MyApp.exe
+#
+# TCP port the persistent UIA server listens on. Default 8765.
+#
+# gui_nav_port: 8765
+#
+# Survive RDP disconnects (Windows-only). Set to true to install a
+# scheduled task that keeps a UIA-friendly session alive even when the
+# console is locked. Off by default — opt in with --keep-rdp-alive.
+#
+# keep_rdp_alive: false

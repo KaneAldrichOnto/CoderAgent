@@ -10,6 +10,9 @@ logs/
 # Agent scratchpad (inter-iteration notes)
 agent_scratchpad.md
 
+# Rolling commit log — written by the agent loop, regenerated locally
+commit_log.md
+
 # Agent done signal
 .agent_done
 
@@ -18,6 +21,10 @@ steering.md
 
 # Internal commit logs
 InternalLogs/
+
+# gui_nav.py persistent server log + RDP keep-alive session id
+gui_nav_server.log
+session_id.txt
 
 __pycache__/
 *.pyc
