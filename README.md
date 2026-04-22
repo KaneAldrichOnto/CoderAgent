@@ -35,8 +35,22 @@ On first run, `setup.py` (called automatically by `agent.py`) will:
 1. **Create `CoderAgentConfig.yaml`** from the example template if it doesn't exist.
 2. **Validate your token** — rejects classic PATs (`ghp_`) early with a clear message.
 3. **Set `GH_TOKEN`** in the environment and authenticate the GitHub CLI.
-4. **Install missing dependencies** (`git`, `gh`) via `winget` (Windows) or `apt`/`dnf` (Linux).
+4. **Install missing core dependencies** (`git`, `gh`) via `winget` (Windows) or `apt`/`dnf`/`pacman` (Linux).
 5. **Download the Copilot CLI** binary from `github/copilot-cli` releases if not already present.
+6. **Install the optional feature dependencies** so every CoderAgent capability
+   works out of the box (see [Auto-installed optional dependencies](#auto-installed-optional-dependencies) below):
+   - `pywinauto` + `pillow` (Python, via `pip`) — required by `gui_nav.py` and the
+     image-edit subcommands of `doc_tools.py`. `pywinauto` is Windows-only and is
+     skipped with a notice elsewhere; `pillow` installs everywhere.
+   - `@mermaid-js/mermaid-cli` (Node, via `npm install -g`) — required by
+     `doc_tools.py render-diagram`. Node.js itself is auto-installed if missing.
+   - `@github/copilot` npm CLI — the standalone multimodal CLI used by
+     `agent.py --cli copilot`. Installed when `--backend=copilot` (the default).
+
+Pass `--no-gui-deps` and/or `--no-copilot-npm-cli` to `agent.py` if you want
+the minimal install behaviour. Each optional install degrades gracefully
+(prints a clear message and continues) if its package manager isn't
+available; the core loop is never blocked by an optional dep.
 
 ### Generating a GitHub Token
 
@@ -137,6 +151,8 @@ python agent.py --prompt <FILE> [options]
 | `--test-cmd CMD` | — | Shell command to run after each iteration (e.g. `pytest tests/`). Output is injected into the next iteration's prompt and used to validate the `.agent_done` signal. |
 | `--backend {copilot,claude}` | `copilot` | Which agent CLI to drive. |
 | `--cli {copilot,gh-copilot,auto}` | `auto` | When `--backend=copilot`, pick the new standalone `copilot` CLI (supports in-turn vision) or the legacy `gh copilot` extension. `auto` prefers `copilot` if on PATH. |
+| `--no-gui-deps` | — | Skip the auto-install of `pywinauto` (Windows) and `pillow` during setup. The features that need them just print an install hint instead. |
+| `--no-copilot-npm-cli` | — | When `--backend=copilot`, skip the auto-install of the `@github/copilot` npm CLI. The loop falls back to legacy `gh copilot` if available. |
 
 ### Examples
 
@@ -195,18 +211,37 @@ The prompt is plain Markdown — include code blocks, links, file paths, or anyt
 The core loop installs everything else (`git`, `gh` CLI, Copilot CLI binary)
 automatically via `setup.py` on first run.
 
-### Optional dependencies (only if you use the matching feature)
+### Auto-installed optional dependencies
 
-| Dependency | Install | Used by |
-|---|---|---|
-| `@github/copilot` npm CLI | `npm install -g @github/copilot` *(or `python setup.py --backend copilot --install-copilot-cli`)* | `agent.py --cli copilot` — enables in-turn multimodal vision |
-| `pywinauto` | `pip install pywinauto` *(or `python setup.py --with-gui`)* | `gui_nav.py` GUI automation server (Windows only) |
-| `pillow` | `pip install pillow` *(or `python setup.py --with-gui`)* | `doc_tools.py` image crop / annotate / arrow / label |
-| `mermaid-cli` (`mmdc`) | `npm install -g @mermaid-js/mermaid-cli` | `doc_tools.py render-diagram` (Mermaid → PNG) |
+Unless you opt out with `--no-gui-deps` / `--no-copilot-npm-cli`, `agent.py`
+also installs the dependencies that power the optional features below the
+first time it runs. Everything is detected before being installed, so
+subsequent runs are no-ops.
+
+| Dependency | Auto-install method | Used by | Platform |
+|---|---|---|---|
+| `@github/copilot` npm CLI | `npm install -g @github/copilot` (installs Node.js first if missing) | `agent.py --cli copilot` — enables in-turn multimodal vision | Windows + Linux |
+| `pywinauto` (Python) | `pip install pywinauto` | `gui_nav.py` GUI automation server | **Windows only** (skipped elsewhere with a notice) |
+| `pillow` (Python) | `pip install pillow` | `doc_tools.py` image crop / annotate / arrow / label | Windows + Linux |
+| `@mermaid-js/mermaid-cli` (`mmdc`) | `npm install -g @mermaid-js/mermaid-cli` (installs Node.js first if missing) | `doc_tools.py render-diagram` (Mermaid → PNG) | Windows + Linux |
+
+Manual install is still supported for any dependency — use the `npm` /
+`pip` command from the table above. You can also run them as a group via
+`setup.py` standalone:
+
+```bash
+python setup.py --with-gui                       # pywinauto (Win) + pillow + mmdc
+python setup.py --backend copilot --install-copilot-cli   # @github/copilot CLI
+python setup.py --with-gui --backend copilot --install-copilot-cli  # everything
+```
 
 ## Optional features
 
-All optional, all opt-in. The core loop works without any of them.
+All optional, all opt-in *from a workflow perspective*. The dependencies are
+auto-installed by `setup.py` on first run (see
+[Auto-installed optional dependencies](#auto-installed-optional-dependencies)),
+so every feature below works out of the box — you just decide whether to use
+it. The core loop runs unchanged whether you use any of them or not.
 
 | Feature | What it does | How to use |
 |---|---|---|
