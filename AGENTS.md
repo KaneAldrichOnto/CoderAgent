@@ -3,6 +3,40 @@
 Conventions for developers (human or AI) modifying CoderAgent itself.
 Keep this file short.
 
+## First-time setup (copilot backend)
+
+The `@github/copilot` CLI (v1.0.34) has THREE independent permission
+gates. All three must pass or every tool call returns
+`Permission denied and could not request permission from user`.
+
+1. **CLI flags.** `agent.py` already passes `--allow-all --no-ask-user
+   --add-dir <work_dir>`. (`--allow-all` is `--allow-all-tools
+   --allow-all-paths --allow-all-urls`.) Do NOT add `--allow-tool=write`
+   — it appears to switch the CLI to allow-list-only mode and denies
+   shell writes as well. The builtin `Create`/`Edit` may still report
+   Permission denied for the first few attempts; the model then falls
+   back to `[IO.File]::WriteAllText` which works.
+2. **Trusted folders.** Add the workspace and the agent's working
+   directory to `~/.copilot/config.json` `trustedFolders`. One-shot
+   PowerShell:
+   ```powershell
+   $cfg = "$env:USERPROFILE\.copilot\config.json"
+   $j = Get-Content $cfg -Raw | ConvertFrom-Json
+   foreach ($f in @('D:\Path\To\Workspace','D:\Path\To\Workspace\CoderAgent')) {
+     if ($j.trustedFolders -notcontains $f) { $j.trustedFolders += $f }
+   }
+   $j | ConvertTo-Json -Depth 10 | Set-Content $cfg -Encoding utf8
+   ```
+3. **Path scope.** `agent.py` runs the CLI with `cwd=work_dir` and
+   `--add-dir work_dir`. Prompt steps must reference files with paths
+   relative to `work_dir` (typically bare filenames). A step that says
+   "create CoderAgent/foo.txt" while the agent is already running in
+   `CoderAgent/` resolves to `CoderAgent/CoderAgent/foo.txt` — outside
+   the trusted scope.
+
+`GH_TOKEN` must be exported before launching `agent.py` (it is read
+from `CoderAgentConfig.yaml`'s `github_token:` line).
+
 ## Layout
 
 - `agent.py` — the loop. Wraps a Copilot or Claude CLI in a long-running

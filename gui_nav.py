@@ -1115,7 +1115,9 @@ class GUINavServer:
 
         save_path = req.get("path") or str(
             Path.cwd() / "screenshots" / "_last_screenshot.png")
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        save_dir = os.path.dirname(save_path)
+        if save_dir:
+            os.makedirs(save_dir, exist_ok=True)
         composite.save(save_path, format="PNG")
 
         warn = ""

@@ -39,10 +39,21 @@ DEFAULT_IDLE_TIMEOUT = 300  # kill if no output for 5 minutes (0 to disable)
 DEFAULT_ITERATION_TIMEOUT = 3600  # kill after 60 minutes total (0 to disable)
 DONE_SIGNAL_FILE = ".agent_done"  # agent creates this file to end early
 
-# Force UTF-8 on Windows
+# Force UTF-8 on Windows (covers console + file/pipe redirection)
 if sys.platform == "win32":
     os.system("chcp 65001 > nul 2>&1")
     os.environ["PYTHONIOENCODING"] = "utf-8"
+
+# Reconfigure stdout/stderr so Unicode (e.g. '●' from copilot CLI) never
+# raises UnicodeEncodeError when output is redirected to a file or pipe whose
+# default encoding is cp1252. Without this the reader thread below dies
+# silently on the first non-ASCII byte, the main loop then waits out the
+# whole idle_timeout, and the user sees a phantom "hang".
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -470,12 +481,26 @@ def run_copilot(prompt: str, *, copilot_cli: str, model: str,
 
     if cli_kind == "copilot":
         # Newer standalone @github/copilot CLI -- enables in-turn vision.
+        # --allow-all is the umbrella permission flag (equivalent to
+        # --allow-all-tools --allow-all-paths --allow-all-urls). Using the
+        # individual flags has been observed to still trip a permission
+        # prompt on some shell invocations (e.g. `cmd /c "..."` with
+        # output redirection), which combined with --no-ask-user causes
+        # the call to fail with "Permission denied and could not request
+        # permission from user". --allow-all avoids that class of issue.
+        # NOTE: --allow-all is documented as "--allow-all-tools
+        # --allow-all-paths --allow-all-urls". In CLI 1.0.34 the
+        # builtin `write` tool may still report "Permission denied"
+        # in non-interactive mode for the first few attempts, but
+        # the model falls back to shell `[IO.File]::WriteAllText`
+        # which works once trustedFolders is set up correctly.
+        # Adding --allow-tool=write was observed to make things WORSE
+        # (it appears to restrict to only the write tool), so do not.
         cmd = [
             copilot_cli,
             "--prompt", short_prompt,
             "--model", model,
-            "--allow-all-tools",
-            "--allow-all-paths",
+            "--allow-all",
             "--no-ask-user",
             "--add-dir", str(work_dir),
         ]
@@ -521,16 +546,38 @@ def run_copilot(prompt: str, *, copilot_cli: str, model: str,
         timeout_reason = ""
 
         def _read_output():
-            """Read stdout in a background thread to allow timeout checks."""
+            """Read stdout in a background thread to allow timeout checks.
+
+            Hardened so a UnicodeEncodeError from print() (e.g. PowerShell
+            file redirect on cp1252 hitting '●' from copilot CLI) cannot
+            silently kill this daemon thread. If it did, the outer loop
+            would wait out the entire idle_timeout, masquerading as a hang.
+            """
             nonlocal last_output_time
             try:
                 for line in proc.stdout:
                     output_lines.append(line)
                     last_output_time = time.monotonic()
-                    print(line, end="")
-                    log(line.rstrip())
+                    try:
+                        print(line, end="", flush=True)
+                    except UnicodeEncodeError:
+                        sys.stdout.write(
+                            line.encode("ascii", "replace").decode("ascii")
+                        )
+                        sys.stdout.flush()
+                    except Exception:
+                        pass
+                    try:
+                        log(line.rstrip())
+                    except Exception:
+                        pass
             except ValueError:
                 pass  # stdout closed
+            except Exception as e:
+                try:
+                    log(f"[reader thread error: {e!r}]")
+                except Exception:
+                    pass
 
         reader = threading.Thread(target=_read_output, daemon=True)
         reader.start()
@@ -668,16 +715,37 @@ def run_claude(prompt: str, *, claude_cli: str, model: str,
         timeout_reason = ""
 
         def _read_output():
-            """Read stdout in a background thread to allow timeout checks."""
+            """Read stdout in a background thread to allow timeout checks.
+
+            Hardened so a UnicodeEncodeError from print() cannot silently
+            kill this daemon thread (which would mask as an idle-timeout
+            hang). See run_copilot for full rationale.
+            """
             nonlocal last_output_time
             try:
                 for line in proc.stdout:
                     output_lines.append(line)
                     last_output_time = time.monotonic()
-                    print(line, end="")
-                    log(line.rstrip())
+                    try:
+                        print(line, end="", flush=True)
+                    except UnicodeEncodeError:
+                        sys.stdout.write(
+                            line.encode("ascii", "replace").decode("ascii")
+                        )
+                        sys.stdout.flush()
+                    except Exception:
+                        pass
+                    try:
+                        log(line.rstrip())
+                    except Exception:
+                        pass
             except ValueError:
                 pass  # stdout closed
+            except Exception as e:
+                try:
+                    log(f"[reader thread error: {e!r}]")
+                except Exception:
+                    pass
 
         reader = threading.Thread(target=_read_output, daemon=True)
         reader.start()
