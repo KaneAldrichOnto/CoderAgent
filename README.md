@@ -28,6 +28,34 @@ python agent.py --prompt prompt.md --dir ../MyProject
 #    Press Ctrl-C
 ```
 
+## Windows: elevation (UAC)
+
+If the agent will drive a GUI app that runs as administrator (for
+example `XFrontside.exe` in this repo), the agent process **must also
+run as administrator** so `gui_nav.py` can attach pywinauto to it.
+
+You have three options, in order of convenience:
+
+1. **Do nothing.** On Windows, `agent.py` detects that it is not
+   elevated and **automatically relaunches itself via UAC** in a new
+   admin `cmd.exe` window. Accept the UAC prompt and the agent runs
+   there; the original (non-elevated) shell exits immediately.
+2. **Use the launcher.** From any shell:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\start_agent_elevated.ps1
+   ```
+   See [start_agent_elevated.ps1](../start_agent_elevated.ps1) at the
+   repo root.
+3. **Open an admin PowerShell yourself** (Win+X &#x2192; "Windows
+   PowerShell (Admin)") and run `python agent.py ...` directly.
+
+If you do **not** need GUI automation against admin processes (just
+shell, build, and commit work), pass `--no-elevate` to skip the UAC
+prompt:
+```
+python agent.py --prompt prompt.md --no-elevate
+```
+
 ## Setup
 
 On first run, `setup.py` (called automatically by `agent.py`) will:
@@ -153,6 +181,7 @@ python agent.py --prompt <FILE> [options]
 | `--cli {copilot,gh-copilot,auto}` | `auto` | When `--backend=copilot`, pick the new standalone `copilot` CLI (supports in-turn vision) or the legacy `gh copilot` extension. `auto` prefers `copilot` if on PATH. |
 | `--no-gui-deps` | — | Skip the auto-install of `pywinauto` (Windows) and `pillow` during setup. The features that need them just print an install hint instead. |
 | `--no-copilot-npm-cli` | — | When `--backend=copilot`, skip the auto-install of the `@github/copilot` npm CLI. The loop falls back to legacy `gh copilot` if available. |
+| `--no-elevate` | — | Windows only. Disable the automatic UAC self-elevation. Use this when you do not need GUI automation against admin processes. |
 
 ### Examples
 

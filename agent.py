@@ -823,6 +823,86 @@ def run_claude(prompt: str, *, claude_cli: str, model: str,
 # Main loop
 # ---------------------------------------------------------------------------
 
+def _is_elevated_windows() -> bool:
+    """Return True if the current process has admin rights on Windows.
+
+    Always returns True on non-Windows (no elevation concept here).
+    """
+    if sys.platform != "win32":
+        return True
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        # If we cannot tell, assume non-elevated so we err on the side
+        # of warning the user rather than silently misbehaving.
+        return False
+
+
+def _maybe_self_elevate(argv: list[str]) -> None:
+    """Re-launch the current process elevated (UAC) on Windows, then exit.
+
+    Only triggers when:
+      - running on Windows,
+      - not already elevated,
+      - and ``--no-elevate`` is NOT in argv.
+
+    The new process opens in its own console window (cmd.exe via
+    ShellExecute "runas") so the UAC prompt's required new-window
+    semantics are honoured. The current (non-elevated) process exits
+    after spawning so the caller is not left with two agents running.
+    """
+    if "--no-elevate" in argv:
+        return
+    if sys.platform != "win32":
+        return
+    if _is_elevated_windows():
+        return
+
+    try:
+        import ctypes
+    except Exception:
+        print("[elevate] ctypes unavailable; cannot self-elevate. "
+              "Re-run from an elevated PowerShell or pass --no-elevate.",
+              file=sys.stderr)
+        sys.exit(1)
+
+    # Build the command line for the elevated process. We re-invoke the
+    # same Python interpreter on the same script with the same args
+    # plus --no-elevate (so the elevated child does not loop), and
+    # keep the same working directory.
+    script = os.path.abspath(sys.argv[0])
+    forwarded = [a for a in argv if a != "--no-elevate"]
+    # Quote each argument for cmd.exe.
+    def _q(s: str) -> str:
+        if not s or any(c in s for c in ' \t"'):
+            return '"' + s.replace('"', '\\"') + '"'
+        return s
+    inner = " ".join(_q(a) for a in [sys.executable, script, *forwarded, "--no-elevate"])
+    # Use cmd.exe /k so the new admin window stays open after the agent
+    # finishes (otherwise the user loses all output the moment it exits).
+    cmd_line = f'/k cd /d {_q(os.getcwd())} && {inner}'
+
+    print("[elevate] Not running as admin; relaunching in an elevated "
+          "PowerShell window via UAC. Pass --no-elevate to skip this.",
+          flush=True)
+
+    # ShellExecuteW: lpVerb="runas" triggers UAC.
+    # SW_SHOWNORMAL = 1
+    rc = ctypes.windll.shell32.ShellExecuteW(
+        None, "runas", "cmd.exe", cmd_line, None, 1
+    )
+    # Per docs, return value > 32 means success.
+    if rc <= 32:
+        print(f"[elevate] UAC elevation failed (ShellExecuteW rc={rc}). "
+              "Re-run manually from an elevated PowerShell, or pass "
+              "--no-elevate to run without elevation (GUI automation will "
+              "not work against admin processes such as XFrontside.exe).",
+              file=sys.stderr)
+        sys.exit(1)
+    sys.exit(0)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Run a Copilot coding agent in a loop",
@@ -894,8 +974,22 @@ def main():
              "@github/copilot npm CLI (which enables in-turn vision via "
              "--cli copilot). Default is to install it.",
     )
+    parser.add_argument(
+        "--no-elevate", action="store_true",
+        help="Windows only. Do not auto-relaunch via UAC if the current "
+             "shell is not elevated. By default, on Windows, agent.py "
+             "self-elevates so gui_nav.py can attach pywinauto to "
+             "admin-integrity processes such as XFrontside.exe. Pass "
+             "this flag if you do not need GUI automation against admin "
+             "processes (the rest of the loop works non-elevated).",
+    )
 
     args = parser.parse_args()
+
+    # Self-elevate on Windows (UAC) before doing anything else, unless the
+    # user opted out. _maybe_self_elevate exits the current process on
+    # success.
+    _maybe_self_elevate(sys.argv[1:])
 
     # Load config, set env vars, install/verify dependencies.
     # By default we also install the optional GUI feature deps (pywinauto +
