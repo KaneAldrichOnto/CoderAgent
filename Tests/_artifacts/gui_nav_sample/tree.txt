@@ -1,0 +1,11 @@
+Starting GUI Nav server (first-time cache build ~25s)...
+Server ready.
+Found 8 controls:
+  Pane: "" rect=(60,83,420,243)
+  Button: "" rect=(223,194,257,220)
+  Button: "" rect=(215,158,264,184)
+  Pane: "" rect=(148,93,332,112)
+  MenuItem: "System" rect=(60,60,82,82)
+  Button: "Minimize" rect=(281,53,328,83)
+  Button: "Maximize" rect=(328,53,374,83)
+  Button: "Close" rect=(374,53,421,83)
