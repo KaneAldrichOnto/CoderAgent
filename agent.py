@@ -35,8 +35,8 @@ from setup import run_setup
 # ---------------------------------------------------------------------------
 DEFAULT_MODEL = "claude-opus-4.7"
 DEFAULT_DELAY = 30  # seconds between iterations
-DEFAULT_IDLE_TIMEOUT = 300  # kill if no output for 5 minutes (0 to disable)
-DEFAULT_ITERATION_TIMEOUT = 3600  # kill after 60 minutes total (0 to disable)
+DEFAULT_IDLE_TIMEOUT = 600  # kill if no output for 10 minutes (0 to disable)
+DEFAULT_ITERATION_TIMEOUT = 7200  # kill after 120 minutes total (0 to disable)
 DONE_SIGNAL_FILE = ".agent_done"  # agent creates this file to end early
 
 # Force UTF-8 on Windows (covers console + file/pipe redirection)
